@@ -90,7 +90,7 @@ function Chat({ messages, draft, setDraft, running, send, stop, onKeyDown }) {
         </div>
         <div className="composer-wrap">
           <div className="composer">
-            <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} placeholder="Ask Hermes anything…" rows="1" />
+            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} placeholder="Ask Hermes anything…" rows="1" />
             <button className={running ? 'stop' : 'send'} onClick={running ? stop : send} aria-label={running ? 'Stop response' : 'Send message'}>{running ? '■' : '↑'}</button>
           </div>
           <div className="composer-hint">Enter to send · Shift+Enter for a new line</div>
