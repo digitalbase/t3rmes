@@ -1,0 +1,8 @@
+{
+  "name": "t3rmes",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A small, fast desktop client for Hermes Agent.",
+  "type": "module",
+  "license": "MIT"
+}
