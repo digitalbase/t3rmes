@@ -485,6 +485,39 @@ function createHermesService({ getWindow }) {
       if (!gateway) return Promise.reject(new Error('Not connected to Hermes.'));
       return gateway.request(method, params);
     },
+    // REST calls against the active runtime, authenticated the same way as the socket.
+    async rest(method, pathname, body) {
+      const connection = gateway?.connection;
+      if (!connection) throw new Error('Not connected to Hermes.');
+      if (connection.kind === 'local') {
+        const { baseUrl, token } = await startLocalBackend();
+        return requestJson(`${baseUrl}${pathname}`, { method, body, headers: { 'X-Hermes-Session-Token': token } });
+      }
+      if (connection.authMode === 'token') {
+        return requestJson(`${connection.url}${pathname}`, { method, body, headers: { Authorization: `Bearer ${connection.token || ''}` } });
+      }
+      return requestJson(`${connection.url}${pathname}`, { method, body, sess: oauthSession(connection) });
+    },
+    // Session edits are revision-fenced: send the row's runtime_revision with a
+    // fresh request id, and retry once against the current revision if it moved.
+    async updateSession(id, patch) {
+      const pathname = `/api/sessions/${encodeURIComponent(id)}`;
+      for (let attempt = 0; ; attempt++) {
+        const snapshot = await this.rest('GET', `${pathname}/mutation-snapshot`).catch((error) => {
+          // Older runtimes have no fence and no snapshot route; a plain PATCH works there.
+          if (error.status === 404 || error.status === 405) return null;
+          throw error;
+        });
+        const body = snapshot
+          ? { ...patch, request_id: crypto.randomUUID(), expected_revision: snapshot.runtime_revision ?? 0 }
+          : patch;
+        try {
+          return await this.rest('PATCH', pathname, body);
+        } catch (error) {
+          if (attempt > 0 || error.status !== 409 || !/revision/i.test(error.message)) throw error;
+        }
+      }
+    },
   };
 }
 

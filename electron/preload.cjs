@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('t3rmes', {
     signOut: (id) => ipcRenderer.invoke('hermes:connections:sign-out', id),
   },
   request: (method, params) => ipcRenderer.invoke('hermes:request', method, params),
+  sessions: {
+    list: () => ipcRenderer.invoke('hermes:sessions:list'),
+    update: (id, patch) => ipcRenderer.invoke('hermes:sessions:update', id, patch),
+  },
+  showContextMenu: (items) => ipcRenderer.invoke('context-menu:show', items),
   onState: (listener) => subscribe('hermes:state', listener),
   onEvent: (listener) => subscribe('hermes:event', listener),
 });

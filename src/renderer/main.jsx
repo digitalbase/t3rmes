@@ -1,9 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowLeftIcon,
   BotIcon,
+  CheckIcon,
+  ChevronDownIcon,
   ChevronsUpDownIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  CircleDashedIcon,
+  GitBranchIcon,
+  MessageCircleQuestionIcon,
+  MessageSquareIcon,
+  PinIcon,
+  Undo2Icon,
   LoaderCircleIcon,
   GlobeIcon,
   MonitorIcon,
@@ -28,7 +38,9 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarRail,
 } from '../t3/components/ui/sidebar.tsx';
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from '../t3/components/ui/tooltip.tsx';
 import { Button } from '../t3/components/ui/button.tsx';
 import { Kbd } from '../t3/components/ui/kbd.tsx';
 import { Switch } from '../t3/components/ui/switch.tsx';
@@ -46,7 +58,7 @@ import {
   MenuTrigger,
 } from '../t3/components/ui/menu.tsx';
 import { cn } from '../t3/lib/utils.ts';
-import { useHermes } from './hermes.js';
+import { threadStatus, threadTitle, useHermes } from './hermes.js';
 import './styles.css';
 
 const SETTINGS_SECTIONS = [
@@ -70,12 +82,48 @@ function stateTone(state) {
   return 'bg-destructive';
 }
 
+// T3 threadSidebarWidth.ts
+const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = 'chat_thread_sidebar_width';
+const THREAD_SIDEBAR_DEFAULT_WIDTH = 16 * 16;
+const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
+const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
+
+function resolveThreadSidebarMaximumWidth(viewportWidth) {
+  return Math.max(THREAD_SIDEBAR_MIN_WIDTH, Math.floor(viewportWidth) - THREAD_MAIN_CONTENT_MIN_WIDTH);
+}
+
+function resolveInitialThreadSidebarWidth(storedWidth, viewportWidth) {
+  const preferred = storedWidth === null ? THREAD_SIDEBAR_DEFAULT_WIDTH : Math.max(THREAD_SIDEBAR_MIN_WIDTH, storedWidth);
+  return Math.min(preferred, resolveThreadSidebarMaximumWidth(viewportWidth));
+}
+
+function readStoredSidebarWidth() {
+  try {
+    const value = JSON.parse(localStorage.getItem(THREAD_SIDEBAR_WIDTH_STORAGE_KEY) ?? 'null');
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function subscribeToViewportWidth(onChange) {
+  window.addEventListener('resize', onChange);
+  return () => window.removeEventListener('resize', onChange);
+}
+
 function App() {
   const hermes = useHermes();
   const [screen, setScreen] = useState(() => (window.location.hash === '#settings' ? 'settings' : 'chat'));
   const [section, setSection] = useState('general');
-  const { connections, threads, activeThread } = hermes;
+  const { connections, activeThread } = hermes;
   const activeConnection = connections.connections.find((c) => c.id === connections.active);
+  const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, () => window.innerWidth);
+  const [sidebarWidth, setSidebarWidth] = useState(() => resolveInitialThreadSidebarWidth(readStoredSidebarWidth(), window.innerWidth));
+  const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
+  const resetSidebarWidth = () => {
+    localStorage.removeItem(THREAD_SIDEBAR_WIDTH_STORAGE_KEY);
+    setSidebarWidth(resolveInitialThreadSidebarWidth(null, viewportWidth));
+  };
 
   function openConnections() {
     setSection('connections');
@@ -83,8 +131,20 @@ function App() {
   }
 
   return (
-    <SidebarProvider className="h-dvh! min-h-0!" defaultOpen>
-      <Sidebar side="left" collapsible="none" className="h-dvh border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <SidebarProvider className="h-dvh! min-h-0!" defaultOpen style={{ '--sidebar-width': `${sidebarWidth}px` }}>
+      <Sidebar
+        side="left"
+        collapsible="offcanvas"
+        className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+        resizable={{
+          maxWidth: sidebarMaximumWidth,
+          minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+          shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+            nextWidth <= currentWidth || wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+          storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+          onResize: setSidebarWidth,
+        }}
+      >
         <SidebarHeader className="drag-region relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-4 py-0">
           <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight text-foreground">
             <span className="font-semibold">T3</span>
@@ -95,7 +155,7 @@ function App() {
           <SettingsNav section={section} onSelect={setSection} />
         ) : (
           <ThreadNav
-            threads={threads}
+            hermes={hermes}
             activeKey={activeThread.key}
             onSelect={hermes.selectThread}
             onNew={() => {
@@ -126,6 +186,7 @@ function App() {
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
+        <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
         {screen === 'settings' ? (
@@ -181,10 +242,110 @@ function ConnectionSwitcher({ hermes, onManage }) {
   );
 }
 
-function ThreadNav({ threads, activeKey, onSelect, onNew }) {
+// ---------- thread list (T3 Sidebar.tsx SidebarThreadRow, fed by Hermes sessions) ----------
+
+const SETTLED_SHELF_STORAGE_KEY = 't3rmes_settled_shelf_expanded';
+
+function compactTimeLabel(epochSeconds) {
+  if (!epochSeconds) return '';
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
+  if (seconds < 60) return 'now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function formatWorkingDurationLabel(elapsedMs) {
+  const seconds = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs / 1000)) : 0;
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+// Self-ticking so only this span re-renders each second, not the whole row.
+function WorkingDuration({ startedAt }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!startedAt) return;
+    const id = window.setInterval(() => setTick((tick) => tick + 1), 1_000);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+  if (!startedAt) return null;
+  return <span className="tabular-nums">{formatWorkingDurationLabel(Date.now() - startedAt)}</span>;
+}
+
+const basename = (value) => value?.replace(/\/+$/, '').split('/').pop() || null;
+const modelLabel = (model) => model?.split('/').pop()?.trim() || null;
+
+function projectLabel(thread) {
+  return basename(thread.repoRoot) || basename(thread.cwd) || thread.source || null;
+}
+
+const STATUS_PRESENTATION = {
+  working: { label: 'Working', Icon: CircleDashedIcon, className: 'text-sky-600 dark:text-sky-400' },
+  waiting: { label: 'Input', Icon: MessageCircleQuestionIcon, className: 'text-indigo-600 dark:text-indigo-300' },
+  failed: { label: 'Failed', Icon: CircleAlertIcon, className: 'text-red-700 dark:text-red-300' },
+  unread: { label: 'Done', Icon: CircleCheckIcon, className: 'text-emerald-700 dark:text-emerald-300' },
+};
+
+function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
+  const { threads, syncSupported } = hermes;
+  const [settledExpanded, setSettledExpanded] = useState(() => localStorage.getItem(SETTLED_SHELF_STORAGE_KEY) === '1');
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setClock((tick) => tick + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  // Unsent new threads only show while they are open, like T3 drafts.
+  const visible = threads.filter((t) => t.storedId || t.messages.length > 0 || t.key === activeKey);
+  const byRecent = (a, b) => (a.storedId ? 0 : 1) - (b.storedId ? 0 : 1) || b.lastActive - a.lastActive;
+  const pinned = visible.filter((t) => t.pinned && !t.archived).sort(byRecent);
+  const active = visible.filter((t) => !t.pinned && !t.archived).sort(byRecent);
+  const settled = visible.filter((t) => t.archived).sort((a, b) => b.lastActive - a.lastActive);
+
+  function toggleSettled() {
+    setSettledExpanded((expanded) => {
+      localStorage.setItem(SETTLED_SHELF_STORAGE_KEY, expanded ? '0' : '1');
+      return !expanded;
+    });
+  }
+
+  async function openContextMenu(event, thread) {
+    if (!syncSupported || !thread.storedId || !window.t3rmes?.showContextMenu) return;
+    event.preventDefault();
+    const clicked = await window.t3rmes.showContextMenu([
+      { id: 'pin', label: thread.pinned ? 'Unpin' : 'Pin' },
+      { id: 'settle', label: thread.archived ? 'Un-settle' : 'Settle' },
+      { id: 'unread', label: 'Mark unread' },
+      { id: 'copy', label: 'Copy session ID', separatorBefore: true },
+    ]);
+    if (clicked === 'pin') hermes.pinThread(thread.key, !thread.pinned);
+    else if (clicked === 'settle') hermes.settleThread(thread.key, !thread.archived);
+    else if (clicked === 'unread') hermes.markUnread(thread.key);
+    else if (clicked === 'copy') navigator.clipboard.writeText(thread.storedId);
+  }
+
+  const row = (thread, variant) => (
+    <SidebarThreadRow
+      key={`${thread.key}:${variant}`}
+      thread={thread}
+      variant={variant}
+      isActive={thread.key === activeKey}
+      syncSupported={syncSupported && Boolean(thread.storedId)}
+      onSelect={() => onSelect(thread.key)}
+      onContextMenu={(event) => openContextMenu(event, thread)}
+      onPin={(value) => hermes.pinThread(thread.key, value)}
+      onSettle={(value) => hermes.settleThread(thread.key, value)}
+    />
+  );
+
   return (
     <SidebarContent className="overflow-x-hidden">
-      <SidebarGroup className="gap-1">
+      <SidebarGroup className="gap-1 px-[var(--sidebar-content-inset)] pt-0 pb-1">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton onClick={onNew}>
@@ -193,21 +354,241 @@ function ThreadNav({ threads, activeKey, onSelect, onNew }) {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
-        <div className="flex h-8 items-center px-[var(--sidebar-row-content-inset)] pt-3 text-xs font-medium text-sidebar-muted-foreground/70">
-          Threads
-        </div>
-        <SidebarMenu>
-          {threads.map((thread) => (
-            <SidebarMenuItem key={thread.key}>
-              <SidebarMenuButton isActive={thread.key === activeKey} onClick={() => onSelect(thread.key)}>
-                <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-                {thread.running && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-info" />}
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
+      </SidebarGroup>
+      <SidebarGroup className="flex-1 ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pt-0 pb-1">
+        <TooltipProvider delay={150} closeDelay={0} timeout={400}>
+        <ul role="list" className="relative flex flex-1 flex-col gap-px">
+          {pinned.map((thread) => row(thread, 'card'))}
+          {active.map((thread) => row(thread, 'card'))}
+          {settled.length > 0 && (
+            <li className="mx-0.5 mt-auto h-8 list-none">
+              <button
+                type="button"
+                onClick={toggleSettled}
+                aria-expanded={settledExpanded}
+                className="flex h-full w-full cursor-pointer items-center gap-2 px-2 text-left text-xs font-medium text-sidebar-muted-foreground/60"
+              >
+                <span className="shrink-0">{settledExpanded ? 'Settled' : `Settled (${settled.length})`}</span>
+                <span aria-hidden className="h-px min-w-2 flex-1 bg-sidebar-border/60" />
+                <ChevronDownIcon aria-hidden className={cn('size-3 shrink-0 transition-transform', settledExpanded && 'rotate-180')} />
+              </button>
+            </li>
+          )}
+          {settledExpanded && settled.map((thread) => row(thread, 'slim'))}
+        </ul>
+        </TooltipProvider>
       </SidebarGroup>
     </SidebarContent>
+  );
+}
+
+function SidebarThreadRow({ thread, variant, isActive, syncSupported, onSelect, onContextMenu, onPin, onSettle }) {
+  const status = threadStatus(thread);
+  const topStatus = status ? STATUS_PRESENTATION[status] : null;
+  const isUnread = status === 'unread';
+  // Hermes' is_active (open, touched within 5 min) keeps a card at full
+  // strength; stale history recedes the way T3 dims background rows.
+  const shouldRecede = !isActive && !status && !thread.isActive && Boolean(thread.storedId);
+  const project = projectLabel(thread);
+  const model = modelLabel(thread.model);
+  const stop = (fn) => (event) => {
+    event.stopPropagation();
+    fn();
+  };
+
+  const rowSurfaceClassName = cn(
+    'group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none',
+    variant === 'slim' && '[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70',
+    isActive
+      ? 'bg-sidebar-row-active text-sidebar-foreground'
+      : shouldRecede
+        ? 'text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground'
+        : 'bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover',
+  );
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect();
+    }
+  };
+
+  const title = (
+    <span
+      className={cn(
+        'min-w-0 flex-1 truncate text-sm',
+        shouldRecede ? 'font-normal' : 'font-medium',
+        variant === 'card'
+          ? shouldRecede
+            ? 'text-secondary-label'
+            : isUnread || status === 'waiting'
+              ? 'text-foreground'
+              : status === 'failed'
+                ? 'text-foreground/95'
+                : 'text-foreground/90'
+          : cn(
+              'group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground',
+              isActive ? 'text-foreground' : isUnread ? 'text-muted-foreground' : 'text-secondary-label/70',
+            ),
+      )}
+    >
+      {threadTitle(thread)}
+    </span>
+  );
+
+  const pinIndicator = thread.pinned ? (
+    syncSupported ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label="Unpin thread"
+              onClick={stop(() => onPin(false))}
+              className="inline-flex cursor-pointer items-center rounded-sm text-muted-foreground/65 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          }
+        >
+          <PinIcon aria-hidden className="size-3 shrink-0" />
+        </TooltipTrigger>
+        <TooltipPopup>Unpin thread</TooltipPopup>
+      </Tooltip>
+    ) : (
+      <PinIcon aria-label="Pinned" role="img" className="size-3 shrink-0 text-muted-foreground/65" />
+    )
+  ) : null;
+
+  if (variant === 'slim') {
+    return (
+      <li className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_36px]">
+        <div
+          role="button"
+          tabIndex={0}
+          className={cn(rowSurfaceClassName, 'flex h-9 items-center gap-2.5 px-2.5')}
+          onClick={onSelect}
+          onKeyDown={handleKeyDown}
+          onContextMenu={onContextMenu}
+        >
+          {title}
+          {pinIndicator}
+          <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
+            <span className={cn('inline-flex justify-end tabular-nums text-secondary-label transition-opacity', syncSupported && 'group-hover/sidebar-row:opacity-0')}>
+              <span className="text-xs">{compactTimeLabel(thread.lastActive)}</span>
+            </span>
+            {syncSupported && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Un-settle thread"
+                      onClick={stop(() => onSettle(false))}
+                      className="pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
+                    />
+                  }
+                >
+                  <Undo2Icon className="mb-px size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">Un-settle thread</TooltipPopup>
+              </Tooltip>
+            )}
+          </span>
+        </div>
+      </li>
+    );
+  }
+
+  return (
+    <li className="list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]">
+      <div
+        role="button"
+        tabIndex={0}
+        className={rowSurfaceClassName}
+        onClick={onSelect}
+        onKeyDown={handleKeyDown}
+        onContextMenu={onContextMenu}
+      >
+        <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
+          <div className="flex h-5 min-w-0 items-center gap-1.5">
+            {project ? (
+              <span className={cn('min-w-0 flex-1 truncate text-secondary-label text-xs', shouldRecede ? 'font-normal' : 'font-medium')}>{project}</span>
+            ) : (
+              <span className="flex-1" />
+            )}
+            {pinIndicator}
+            <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
+              <span
+                className={cn(
+                  'flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity',
+                  syncSupported &&
+                    'pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-hover/sidebar-row:absolute group-hover/sidebar-row:right-0 group-hover/sidebar-row:opacity-0',
+                )}
+              >
+                {topStatus ? (
+                  <span className={cn('inline-flex items-center gap-1 font-medium', topStatus.className)}>
+                    <topStatus.Icon aria-hidden className="size-4 shrink-0" />
+                    <span role="status">{topStatus.label}</span>
+                    {status === 'working' && (
+                      <span aria-hidden>
+                        <WorkingDuration startedAt={thread.runningSince} />
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  compactTimeLabel(thread.lastActive)
+                )}
+              </span>
+              {syncSupported && (
+                <span className="pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label="Settle thread"
+                          onClick={stop(() => onSettle(true))}
+                          className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                        />
+                      }
+                    >
+                      <CheckIcon className="size-3.5" />
+                      Settle
+                    </TooltipTrigger>
+                    <TooltipPopup>Settle thread</TooltipPopup>
+                  </Tooltip>
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="mt-1 flex min-w-0">{title}</div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
+            {thread.branch ? (
+              <>
+                <GitBranchIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/40" />
+                <span className="min-w-0 flex-1 truncate whitespace-nowrap text-muted-foreground/40">{thread.branch}</span>
+              </>
+            ) : model ? (
+              <span className="min-w-0 flex-1 truncate whitespace-nowrap text-muted-foreground/40">{model}</span>
+            ) : (
+              <span className="flex-1" />
+            )}
+            <span aria-hidden className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-2 text-sidebar-muted-foreground/70">
+              {thread.toolCallCount > 0 && (
+                <span className="inline-flex items-center gap-0.5 tabular-nums">
+                  <WrenchIcon className="size-3 opacity-60" />
+                  {thread.toolCallCount}
+                </span>
+              )}
+              {thread.messageCount > 0 && (
+                <span className="inline-flex items-center gap-0.5 tabular-nums">
+                  <MessageSquareIcon className="size-3 opacity-60" />
+                  {thread.messageCount}
+                </span>
+              )}
+            </span>
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }
 
@@ -251,7 +632,7 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <PageHeader>
-        <h2 className="min-w-0 truncate text-sm font-medium text-foreground">{thread.title}</h2>
+        <h2 className="min-w-0 truncate text-sm font-medium text-foreground">{threadTitle(thread)}</h2>
         <span className="inline-flex h-5 items-center gap-1.5 rounded-full border border-border px-2 text-[11px] text-muted-foreground">
           <span className={cn('size-1.5 rounded-full', stateTone(connectionState))} />
           {connection?.label ?? 'Hermes'}
