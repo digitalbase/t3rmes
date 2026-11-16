@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarInset } from '../t3/components/ui/sidebar.tsx';
+import { MessageCircle, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import './styles.css';
 
 const seed = [
@@ -59,18 +61,16 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div className="brand"><span className="brand-mark">✦</span><span>t3rmes</span></div>
-        <div className="connection"><span className="status-dot" /> Local Hermes <span className="version">0.0.1</span></div>
-      </header>
-      <div className="workspace">
-        <aside className="sidebar">
-          <button className={`side-item ${screen === 'chat' ? 'active' : ''}`} onClick={() => setScreen('chat')}><span className="side-icon">⌂</span><span>Chat</span></button>
-          <div className="sidebar-spacer" />
-          <button className={`side-item ${screen === 'settings' ? 'active' : ''}`} onClick={() => setScreen('settings')}><span className="side-icon">⚙</span><span>Settings</span></button>
-        </aside>
-        {screen === 'settings' ? <Settings onBack={() => setScreen('chat')} /> : <Chat messages={messages} draft={draft} setDraft={setDraft} running={running} send={send} stop={stop} onKeyDown={onKeyDown} />}
-      </div>
+      <SidebarProvider defaultOpen>
+        <Sidebar collapsible="none" variant="sidebar">
+          <SidebarHeader><div className="t3-brand"><Sparkles size={16} /> t3rmes</div></SidebarHeader>
+          <SidebarContent><SidebarMenu>
+            <SidebarMenuItem><SidebarMenuButton isActive={screen === 'chat'} onClick={() => setScreen('chat')}><MessageCircle /><span>Chat</span></SidebarMenuButton></SidebarMenuItem>
+          </SidebarMenu></SidebarContent>
+          <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton isActive={screen === 'settings'} onClick={() => setScreen('settings')}><SettingsIcon /><span>Settings</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
+        </Sidebar>
+        <SidebarInset><header className="topbar"><div className="connection"><span className="status-dot" /> Local Hermes <span className="version">0.0.1</span></div></header>{screen === 'settings' ? <Settings onBack={() => setScreen('chat')} /> : <Chat messages={messages} draft={draft} setDraft={setDraft} running={running} send={send} stop={stop} onKeyDown={onKeyDown} />}</SidebarInset>
+      </SidebarProvider>
     </main>
   );
 }
