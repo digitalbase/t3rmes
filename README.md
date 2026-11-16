@@ -70,7 +70,7 @@ Use T3's `apps/desktop` and `packages/client-runtime` for shell/runtime patterns
 ## Development sequence
 
 1. Establish the Electron/Vite shell and a fast empty chat window.
-2. Add a Hermes adapter with a fake transport for renderer development.
+2. Add a Hermes adapter (main process) for local and remote gateways.
 3. Connect to a real local gateway and render one streaming turn.
 4. Add cancellation, reconnect, persistence, and compact tool rows.
 5. Measure cold start, first paint, idle memory, and time-to-first-token before adding features.
