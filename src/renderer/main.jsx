@@ -4,7 +4,6 @@ import {
   ArrowLeftIcon,
   BotIcon,
   CheckIcon,
-  ChevronDownIcon,
   ChevronsUpDownIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -57,6 +56,7 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from '../t3/components/ui/menu.tsx';
+import { CollapsibleSectionHeader } from '../t3/components/ui/collapsible-section-header.tsx';
 import { cn } from '../t3/lib/utils.ts';
 import { threadStatus, threadTitle, useHermes } from './hermes.js';
 import './styles.css';
@@ -245,6 +245,7 @@ function ConnectionSwitcher({ hermes, onManage }) {
 // ---------- thread list (T3 Sidebar.tsx SidebarThreadRow, fed by Hermes sessions) ----------
 
 const SETTLED_SHELF_STORAGE_KEY = 't3rmes_settled_shelf_expanded';
+const WORKING_SHELF_STORAGE_KEY = 't3rmes_working_shelf_expanded';
 
 function compactTimeLabel(epochSeconds) {
   if (!epochSeconds) return '';
@@ -291,32 +292,121 @@ const STATUS_PRESENTATION = {
   unread: { label: 'Done', Icon: CircleCheckIcon, className: 'text-emerald-700 dark:text-emerald-300' },
 };
 
+function useShelfExpanded(storageKey) {
+  const [expanded, setExpanded] = useState(() => localStorage.getItem(storageKey) === '1');
+  const toggle = () =>
+    setExpanded((value) => {
+      localStorage.setItem(storageKey, value ? '0' : '1');
+      return !value;
+    });
+  return [expanded, toggle];
+}
+
+// A collapsed shelf still shows the open thread, like T3's routeThreadOnly.
+const shelfRows = (list, expanded, activeKey) => (expanded ? list : list.filter((t) => t.key === activeKey));
+
+const EMPTY_SELECTION = { keys: new Set(), anchor: null };
+
 function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
   const { threads, syncSupported } = hermes;
-  const [settledExpanded, setSettledExpanded] = useState(() => localStorage.getItem(SETTLED_SHELF_STORAGE_KEY) === '1');
+  const [settledExpanded, toggleSettled] = useShelfExpanded(SETTLED_SHELF_STORAGE_KEY);
+  const [workingExpanded, toggleWorking] = useShelfExpanded(WORKING_SHELF_STORAGE_KEY);
+  const [selection, setSelection] = useState(EMPTY_SELECTION);
   const [, setClock] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => setClock((tick) => tick + 1), 30_000);
     return () => window.clearInterval(id);
   }, []);
 
+  const clearSelection = () => setSelection((current) => (current.keys.size === 0 && current.anchor === null ? current : EMPTY_SELECTION));
+  useEffect(() => {
+    if (selection.keys.size === 0) return;
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setSelection(EMPTY_SELECTION);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selection.keys.size]);
+
   // Unsent new threads only show while they are open, like T3 drafts.
   const visible = threads.filter((t) => t.storedId || t.messages.length > 0 || t.key === activeKey);
   const byRecent = (a, b) => (a.storedId ? 0 : 1) - (b.storedId ? 0 : 1) || b.lastActive - a.lastActive;
+  const isWorking = (t) => threadStatus(t) === 'working';
   const pinned = visible.filter((t) => t.pinned && !t.archived).sort(byRecent);
-  const active = visible.filter((t) => !t.pinned && !t.archived).sort(byRecent);
+  const inbox = visible.filter((t) => !t.pinned && !t.archived);
+  const active = inbox.filter((t) => !isWorking(t)).sort(byRecent);
+  const working = inbox.filter(isWorking).sort((a, b) => (b.runningSince ?? 0) - (a.runningSince ?? 0));
   const settled = visible.filter((t) => t.archived).sort((a, b) => b.lastActive - a.lastActive);
+  const renderedWorking = shelfRows(working, workingExpanded, activeKey);
+  const renderedSettled = shelfRows(settled, settledExpanded, activeKey);
+  const orderedKeys = [...pinned, ...active, ...renderedWorking, ...renderedSettled].map((t) => t.key);
+  const threadByKey = new Map(visible.map((t) => [t.key, t]));
 
-  function toggleSettled() {
-    setSettledExpanded((expanded) => {
-      localStorage.setItem(SETTLED_SHELF_STORAGE_KEY, expanded ? '0' : '1');
-      return !expanded;
-    });
+  function handleRowClick(event, thread) {
+    const isMac = /mac/i.test(navigator.platform);
+    if (isMac ? event.metaKey : event.ctrlKey) {
+      event.preventDefault();
+      setSelection((current) => {
+        const keys = new Set(current.keys);
+        if (keys.has(thread.key)) keys.delete(thread.key);
+        else keys.add(thread.key);
+        return { keys, anchor: keys.has(thread.key) ? thread.key : current.anchor };
+      });
+      return;
+    }
+    if (event.shiftKey) {
+      event.preventDefault();
+      setSelection((current) => {
+        const keys = new Set(current.keys);
+        const anchor = current.anchor ?? activeKey;
+        const from = orderedKeys.indexOf(anchor);
+        const to = orderedKeys.indexOf(thread.key);
+        if (from === -1 || to === -1) {
+          keys.add(thread.key);
+          return { keys, anchor: thread.key };
+        }
+        for (let i = Math.min(from, to); i <= Math.max(from, to); i++) keys.add(orderedKeys[i]);
+        return { keys, anchor };
+      });
+      return;
+    }
+    setSelection({ keys: new Set(), anchor: thread.key });
+    onSelect(thread.key);
+  }
+
+  async function openBulkContextMenu() {
+    const selected = [...selection.keys].map((key) => threadByKey.get(key)).filter((t) => t?.storedId);
+    if (selected.length === 0) return;
+    const keysOf = (list) => list.map((t) => t.key);
+    const pinnedSelected = selected.filter((t) => t.pinned);
+    const unpinnedSelected = selected.filter((t) => !t.pinned);
+    const settling = selected.filter((t) => !t.archived);
+    const unsettling = selected.filter((t) => t.archived);
+    const clicked = await window.t3rmes.showContextMenu([
+      ...(unpinnedSelected.length ? [{ id: 'pin', label: `Pin (${unpinnedSelected.length})` }] : []),
+      ...(pinnedSelected.length ? [{ id: 'unpin', label: `Unpin (${pinnedSelected.length})` }] : []),
+      ...(settling.length ? [{ id: 'settle', label: `Settle (${settling.length})` }] : []),
+      ...(unsettling.length ? [{ id: 'unsettle', label: `Un-settle (${unsettling.length})` }] : []),
+      { id: 'mark-unread', label: `Mark unread (${selected.length})` },
+    ]);
+    if (!clicked) return;
+    clearSelection();
+    if (clicked === 'pin') hermes.patchThreads(keysOf(unpinnedSelected), { pinned: true });
+    else if (clicked === 'unpin') hermes.patchThreads(keysOf(pinnedSelected), { pinned: false });
+    else if (clicked === 'settle') hermes.patchThreads(keysOf(settling), { archived: true });
+    else if (clicked === 'unsettle') hermes.patchThreads(keysOf(unsettling), { archived: false });
+    else if (clicked === 'mark-unread') hermes.patchThreads(keysOf(selected), { unread: true });
   }
 
   async function openContextMenu(event, thread) {
     if (!syncSupported || !thread.storedId || !window.t3rmes?.showContextMenu) return;
     event.preventDefault();
+    if (selection.keys.size > 0 && selection.keys.has(thread.key)) {
+      await openBulkContextMenu();
+      return;
+    }
     const clicked = await window.t3rmes.showContextMenu([
       { id: 'pin', label: thread.pinned ? 'Unpin' : 'Pin' },
       { id: 'settle', label: thread.archived ? 'Un-settle' : 'Settle' },
@@ -335,8 +425,9 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
       thread={thread}
       variant={variant}
       isActive={thread.key === activeKey}
+      isSelected={selection.keys.has(thread.key)}
       syncSupported={syncSupported && Boolean(thread.storedId)}
-      onSelect={() => onSelect(thread.key)}
+      onSelect={(event) => handleRowClick(event, thread)}
       onContextMenu={(event) => openContextMenu(event, thread)}
       onPin={(value) => hermes.pinThread(thread.key, value)}
       onSettle={(value) => hermes.settleThread(thread.key, value)}
@@ -360,21 +451,20 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
         <ul role="list" className="relative flex flex-1 flex-col gap-px">
           {pinned.map((thread) => row(thread, 'card'))}
           {active.map((thread) => row(thread, 'card'))}
-          {settled.length > 0 && (
-            <li className="mx-0.5 mt-auto h-8 list-none">
-              <button
-                type="button"
-                onClick={toggleSettled}
-                aria-expanded={settledExpanded}
-                className="flex h-full w-full cursor-pointer items-center gap-2 px-2 text-left text-xs font-medium text-sidebar-muted-foreground/60"
-              >
-                <span className="shrink-0">{settledExpanded ? 'Settled' : `Settled (${settled.length})`}</span>
-                <span aria-hidden className="h-px min-w-2 flex-1 bg-sidebar-border/60" />
-                <ChevronDownIcon aria-hidden className={cn('size-3 shrink-0 transition-transform', settledExpanded && 'rotate-180')} />
-              </button>
-            </li>
+          {working.length > 0 && (
+            <SidebarShelfHeader className="mt-auto" label="Working" count={working.length} expanded={workingExpanded} onToggle={toggleWorking} />
           )}
-          {settledExpanded && settled.map((thread) => row(thread, 'slim'))}
+          {renderedWorking.map((thread) => row(thread, 'card'))}
+          {settled.length > 0 && (
+            <SidebarShelfHeader
+              className={cn(working.length === 0 && 'mt-auto')}
+              label="Settled"
+              count={settled.length}
+              expanded={settledExpanded}
+              onToggle={toggleSettled}
+            />
+          )}
+          {renderedSettled.map((thread) => row(thread, 'slim'))}
         </ul>
         </TooltipProvider>
       </SidebarGroup>
@@ -382,7 +472,21 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
   );
 }
 
-function SidebarThreadRow({ thread, variant, isActive, syncSupported, onSelect, onContextMenu, onPin, onSettle }) {
+function SidebarShelfHeader({ label, count, expanded, onToggle, className }) {
+  return (
+    <li className={cn('relative mx-0.5 h-8 list-none', className)}>
+      <CollapsibleSectionHeader
+        onClick={onToggle}
+        expanded={expanded}
+        accessory={<span className="font-normal tabular-nums">{count}</span>}
+      >
+        {label}
+      </CollapsibleSectionHeader>
+    </li>
+  );
+}
+
+function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported, onSelect, onContextMenu, onPin, onSettle }) {
   const status = threadStatus(thread);
   const topStatus = status ? STATUS_PRESENTATION[status] : null;
   const isUnread = status === 'unread';
@@ -397,18 +501,20 @@ function SidebarThreadRow({ thread, variant, isActive, syncSupported, onSelect, 
   };
 
   const rowSurfaceClassName = cn(
-    'group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none',
-    variant === 'slim' && '[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70',
+    'group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+    variant === 'slim' && !isActive && '[&:not(:hover):not(:focus-within)_*]:text-secondary-label',
     isActive
-      ? 'bg-sidebar-row-active text-sidebar-foreground'
-      : shouldRecede
+      ? 'bg-sidebar-row-active text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70'
+      : isSelected
+        ? 'bg-sidebar-row-selected text-sidebar-foreground light:ring-1 light:ring-inset light:ring-sidebar-border/70'
+        : shouldRecede
         ? 'text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground'
         : 'bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover',
   );
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      onSelect();
+      onSelect(event);
     }
   };
 

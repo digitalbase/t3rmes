@@ -350,6 +350,8 @@ export function useHermes() {
     pinThread: (key, pinned) => patchThread(key, { pinned }),
     settleThread: (key, settled) => patchThread(key, { archived: settled }),
     markUnread: (key) => patchThread(key, { unread: true }),
+    // Each session carries its own revision fence, so bulk edits run in parallel.
+    patchThreads: (keys, patch) => Promise.all(keys.map((key) => patchThread(key, patch))),
     selectConnection: wrap((id) => bridge.connections.select(id), true),
     addConnection: wrap((input) => bridge.connections.add(input), true),
     removeConnection: wrap((id) => bridge.connections.remove(id), true),
