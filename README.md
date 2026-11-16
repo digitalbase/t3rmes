@@ -74,3 +74,20 @@ Use T3's `apps/desktop` and `packages/client-runtime` for shell/runtime patterns
 3. Connect to a real local gateway and render one streaming turn.
 4. Add cancellation, reconnect, persistence, and compact tool rows.
 5. Measure cold start, first paint, idle memory, and time-to-first-token before adding features.
+
+## Local verification
+
+Run the renderer and Electron shell with:
+
+```bash
+npm run dev
+```
+
+For a non-interactive startup check, use:
+
+```bash
+npm run build
+npm run smoke-test
+```
+
+The smoke test launches the packaged Electron entry point for a bounded period and fails on renderer or main-process module/runtime errors. Use the running window for visual and interaction checks; the left sidebar, settings route, composer, streaming response, and stop action are the first paths to exercise.

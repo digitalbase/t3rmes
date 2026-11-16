@@ -11,7 +11,8 @@
     "dev:renderer": "vite --host 127.0.0.1 --port 5175",
     "dev:electron": "wait-on http://127.0.0.1:5175 && env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "vite build",
-    "start": "npm run build && electron ."
+    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "smoke-test": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
