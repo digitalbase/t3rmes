@@ -2,7 +2,25 @@
   "name": "t3rmes",
   "version": "0.0.1",
   "private": true,
+  "main": "electron/main.cjs",
   "description": "A small, fast desktop client for Hermes Agent.",
   "type": "module",
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5175",
+    "dev:electron": "wait-on http://127.0.0.1:5175 && env -u ELECTRON_RUN_AS_NODE electron .",
+    "build": "vite build",
+    "start": "npm run build && electron ."
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "electron": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest",
+    "wait-on": "latest"
+  },
+  "devDependencies": {}
 }
