@@ -162,28 +162,32 @@ function App() {
               hermes.createThread();
               setScreen('chat');
             }}
+            onManageConnections={openConnections}
           />
         )}
-        <SidebarFooter className="px-[var(--sidebar-content-inset)] py-1">
-          <SidebarMenu>
-            {screen === 'chat' && (
-              <SidebarMenuItem>
-                <ConnectionSwitcher hermes={hermes} onManage={openConnections} />
-              </SidebarMenuItem>
-            )}
-            <SidebarMenuItem>
-              {screen === 'settings' ? (
+        <SidebarFooter>
+          <SidebarMenu className="flex-row items-center">
+            {screen === 'settings' ? (
+              <SidebarMenuItem className="min-w-0 flex-1">
                 <SidebarMenuButton onClick={() => setScreen('chat')}>
                   <ArrowLeftIcon />
                   <span>Back</span>
                 </SidebarMenuButton>
-              ) : (
-                <SidebarMenuButton onClick={() => setScreen('settings')}>
-                  <SettingsIcon />
-                  <span>Settings</span>
-                </SidebarMenuButton>
-              )}
-            </SidebarMenuItem>
+              </SidebarMenuItem>
+            ) : (
+              <SidebarMenuItem className="shrink-0">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton aria-label="Settings" size="icon" onClick={() => setScreen('settings')}>
+                        <SettingsIcon />
+                      </SidebarMenuButton>
+                    }
+                  />
+                  <TooltipPopup side="top">Settings</TooltipPopup>
+                </Tooltip>
+              </SidebarMenuItem>
+            )}
           </SidebarMenu>
         </SidebarFooter>
         <SidebarRail onDoubleClick={resetSidebarWidth} />
@@ -212,13 +216,17 @@ function ConnectionSwitcher({ hermes, onManage }) {
   const active = connections.connections.find((c) => c.id === connections.active);
   return (
     <Menu>
-      <MenuTrigger render={<SidebarMenuButton />}>
+      <MenuTrigger
+        render={
+          <SidebarMenuButton className="h-8 min-w-0 flex-1 text-sidebar-muted-foreground hover:text-sidebar-foreground data-[popup-open]:text-sidebar-foreground" />
+        }
+      >
         {active?.kind === 'local' ? <MonitorIcon /> : <GlobeIcon />}
         <span className="min-w-0 flex-1 truncate">{active?.label ?? 'Hermes'}</span>
         <span className={cn('size-1.5 shrink-0 rounded-full', stateTone(connections.state))} />
         <ChevronsUpDownIcon className="text-muted-foreground" />
       </MenuTrigger>
-      <MenuPopup side="top" align="start" className="w-(--anchor-width) min-w-56">
+      <MenuPopup side="bottom" align="start" className="w-(--anchor-width) min-w-56">
         <MenuGroup>
           <MenuGroupLabel>Hermes runtime</MenuGroupLabel>
           <MenuRadioGroup value={connections.active} onValueChange={(id) => hermes.selectConnection(id)}>
@@ -307,7 +315,7 @@ const shelfRows = (list, expanded, activeKey) => (expanded ? list : list.filter(
 
 const EMPTY_SELECTION = { keys: new Set(), anchor: null };
 
-function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
+function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) {
   const { threads, syncSupported } = hermes;
   const [settledExpanded, toggleSettled] = useShelfExpanded(SETTLED_SHELF_STORAGE_KEY);
   const [workingExpanded, toggleWorking] = useShelfExpanded(WORKING_SHELF_STORAGE_KEY);
@@ -435,17 +443,19 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
   );
 
   return (
-    <SidebarContent className="overflow-x-hidden">
-      <SidebarGroup className="gap-1 px-[var(--sidebar-content-inset)] pt-0 pb-1">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={onNew}>
+    <SidebarContent
+      className="min-h-full overflow-x-hidden"
+      fixedHeader={
+        <SidebarGroup className="z-[1] pt-0">
+          <div className="flex items-center gap-1">
+            <ConnectionSwitcher hermes={hermes} onManage={onManageConnections} />
+            <SidebarHeaderIconButton label="New thread" onClick={onNew}>
               <SquarePenIcon />
-              <span>New thread</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarGroup>
+            </SidebarHeaderIconButton>
+          </div>
+        </SidebarGroup>
+      }
+    >
       <SidebarGroup className="flex-1 ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pt-0 pb-1">
         <TooltipProvider delay={150} closeDelay={0} timeout={400}>
         <ul role="list" className="relative flex flex-1 flex-col gap-px">
@@ -469,6 +479,20 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew }) {
         </TooltipProvider>
       </SidebarGroup>
     </SidebarContent>
+  );
+}
+
+// T3 SidebarThreadHeader.tsx SidebarHeaderIconButton.
+function SidebarHeaderIconButton({ label, className, children, ...rest }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<SidebarMenuButton size="icon" type="button" aria-label={label} {...rest} className={cn('relative size-7 shrink-0', className)} />}
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
   );
 }
 
