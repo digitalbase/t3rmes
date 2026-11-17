@@ -258,6 +258,7 @@ export function useHermes() {
   threadsRef.current = threads;
   const activeKeyRef = useRef(activeKey);
   activeKeyRef.current = activeKey;
+  const markUnreadRef = useRef(null);
 
   const updateThread = useCallback((key, update) => {
     setThreads((current) => current.map((t) => (t.key === key ? update(t) : t)));
@@ -314,6 +315,11 @@ export function useHermes() {
       setThreads((current) => current.map((t) => (t.sessionId === sessionId ? applyEvent(t, type, payload) : t)));
       // Pick up the server-side title, counts and read state once a turn lands.
       if (type === 'message.complete') {
+        // A turn that lands while another thread is open shows T3's green "Done" until visited.
+        const finished = threadsRef.current.find((t) => t.sessionId === sessionId);
+        if (finished && finished.key !== activeKeyRef.current && payload?.status !== 'error' && payload?.status !== 'interrupted') {
+          markUnreadRef.current?.(finished.key);
+        }
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(refresh, 800);
       }
@@ -365,6 +371,12 @@ export function useHermes() {
     },
     [updateThread],
   );
+
+  markUnreadRef.current = (key) => {
+    const thread = threadsRef.current.find((t) => t.key === key);
+    if (thread?.storedId && syncSupported) patchThread(key, { unread: true });
+    else updateThread(key, (t) => ({ ...t, unread: true }));
+  };
 
   const activeThread = threads.find((t) => t.key === activeKey) ?? threads[0];
 
