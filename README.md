@@ -91,3 +91,20 @@ npm run smoke-test
 ```
 
 The smoke test launches the packaged Electron entry point for a bounded period and fails on renderer or main-process module/runtime errors. Use the running window for visual and interaction checks; the left sidebar, settings route, composer, streaming response, and stop action are the first paths to exercise.
+
+## Releases
+
+Versions follow T3 Code: `X.Y.Z` in `package.json`, tagged as `vX.Y.Z`. Versions with a suffix (for example `0.1.0-beta.1`) are published as prereleases.
+
+To cut a release:
+
+```bash
+npm version patch   # or minor / major / 0.1.0-beta.1; bumps package.json, commits, and tags vX.Y.Z
+git push github main --follow-tags
+```
+
+Pushing the tag runs `.github/workflows/release.yml`, which checks that the tag matches `package.json`, builds the Linux AppImage, `.deb` and `.pacman` and the macOS `.dmg` (arm64 and x64, unsigned), and publishes them to a GitHub Release named `T3rmes vX.Y.Z`.
+
+To build packages locally, run `npm run dist:linux` or `npm run dist:mac`. Output goes to `release/`.
+
+The macOS builds are not signed. On first launch, right-click the app and choose Open, or run `xattr -dr com.apple.quarantine /Applications/T3rmes.app`.
