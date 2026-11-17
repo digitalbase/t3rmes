@@ -1097,9 +1097,27 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
   const running = thread.running;
   const connected = connectionState === 'ready';
 
+  // Follow new output only while the reader is at the bottom; a new thread always starts there.
+  const stickToBottomRef = useRef(true);
+  const scrolledThreadRef = useRef(null);
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [thread.messages]);
+    const viewport = scrollRef.current;
+    if (!viewport) return undefined;
+    const onScroll = () => {
+      stickToBottomRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 64;
+    };
+    viewport.addEventListener('scroll', onScroll, { passive: true });
+    return () => viewport.removeEventListener('scroll', onScroll);
+  }, [isEmpty, thread.key]);
+  useEffect(() => {
+    const viewport = scrollRef.current;
+    if (!viewport) return;
+    if (scrolledThreadRef.current !== thread.key) {
+      scrolledThreadRef.current = thread.key;
+      stickToBottomRef.current = true;
+    }
+    if (stickToBottomRef.current) viewport.scrollTo({ top: viewport.scrollHeight });
+  }, [thread.key, thread.messages]);
 
   function submit(event) {
     event?.preventDefault();
@@ -1179,7 +1197,8 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
       ) : (
         <>
           <div className="relative flex min-h-0 flex-1 flex-col">
-            <div ref={scrollRef} className="topbar-scroll-fade min-h-0 flex-1 overflow-y-auto">
+            {/* px-12 keeps a gutter for the minimap even when the lane would fill the pane. */}
+            <div ref={scrollRef} className="topbar-scroll-fade min-h-0 flex-1 overflow-y-auto px-12">
               <div data-timeline-root className="mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-3 px-5 pt-6 pb-8">
                 {thread.loading && <Spinner className="mx-auto size-4 text-muted-foreground" />}
                 <Timeline key={thread.key} thread={thread} />
