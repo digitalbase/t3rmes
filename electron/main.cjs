@@ -17,6 +17,7 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#ffffff',
     titleBarStyle: 'hiddenInset',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

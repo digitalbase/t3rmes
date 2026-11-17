@@ -12,9 +12,10 @@
     "dev:electron": "wait-on http://127.0.0.1:5175 && env -u ELECTRON_RUN_AS_NODE electron .",
     "build": "vite build",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
-    "smoke-test": "node scripts/smoke-test.mjs"
+    "smoke-test": "node scripts/smoke-test.mjs",
+    "dist": "vite build && electron-builder --linux AppImage"
   },
-  "dependencies": {
+  "devDependencies": {
     "@base-ui/react": "^1.9.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@pierre/diffs": "^1.6.4",
@@ -24,6 +25,7 @@
     "concurrently": "latest",
     "effect": "^4.1.4",
     "electron": "latest",
+    "electron-builder": "^26.18.0",
     "lucide-react": "^1.73.0",
     "react": "latest",
     "react-dom": "latest",
@@ -33,5 +35,31 @@
     "tailwindcss": "^4.3.5",
     "vite": "latest",
     "wait-on": "latest"
-  }
+  },
+  "build": {
+    "appId": "eu.digitalbase.t3rmes",
+    "productName": "T3rmes",
+    "executableName": "t3rmes",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "asar": true,
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png",
+      "category": "Development",
+      "synopsis": "A small, fast desktop client for Hermes Agent",
+      "syncDesktopName": true
+    },
+    "appImage": {
+      "artifactName": "T3rmes-${version}.AppImage"
+    }
+  },
+  "author": "digitalbase <gijs@digitalbase.eu>",
+  "desktopName": "t3rmes.desktop"
 }
