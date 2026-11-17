@@ -1239,9 +1239,10 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
 
   const selection = useComposerSelection(thread, picker.modelOptions, picker.defaults);
   async function selectModel(provider, model) {
-    const result = await picker.selectModel(provider, model);
+    const from = { model: selection.model, provider: selection.provider?.slug ?? null };
+    const result = await picker.selectModel(provider, model, { from });
     if (result?.confirm_required && window.confirm(result.confirm_message || `Switch to ${model}?`)) {
-      await picker.selectModel(provider, model, { confirmed: true });
+      await picker.selectModel(provider, model, { confirmed: true, from });
     }
   }
 
@@ -1305,7 +1306,7 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
             <div ref={scrollRef} className="topbar-scroll-fade min-h-0 flex-1 overflow-y-auto px-12">
               <div data-timeline-root className="mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-3 px-5 pt-6 pb-8">
                 {thread.loading && <Spinner className="mx-auto size-4 text-muted-foreground" />}
-                <Timeline key={thread.key} thread={thread} />
+                <Timeline key={thread.key} thread={thread} providers={picker.modelOptions.providers} />
               </div>
             </div>
             <TimelineMinimap key={thread.key} scrollRef={scrollRef} messages={thread.messages} />

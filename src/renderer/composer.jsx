@@ -138,6 +138,16 @@ function findProvider(providers, slug) {
   return providers.find((p) => p.slug === slug) || providers.find((p) => slug && p.slug.split(':')[0] === slug && p.is_current) || null;
 }
 
+// A Hermes provider slug's logo, as the model picker draws it; `providers` is model.options' catalog.
+export function ProviderLogo({ providers, slug, model, className }) {
+  const provider =
+    (slug && findProvider(providers, slug)) ||
+    providers.find((p) => model && p.models?.includes(model)) ||
+    (slug ? { slug, name: slug } : null);
+  const isCliProxy = useIsCliProxy(provider);
+  return <ProviderIcon provider={provider} isCliProxy={isCliProxy} className={className} />;
+}
+
 export function useComposerSelection(thread, modelOptions, defaults) {
   const providers = modelOptions.providers;
   const pick = { ...thread.runtime, ...thread.pending };

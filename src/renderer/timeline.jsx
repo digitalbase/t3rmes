@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ArrowRightIcon,
+  ArrowRightLeftIcon,
   BotIcon,
   BrainIcon,
   CheckIcon,
@@ -20,7 +22,7 @@ import { Button } from '../t3/components/ui/button.tsx';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../t3/components/ui/tooltip.tsx';
 import { observeVisibleAnimation } from '../t3/lib/visibleAnimation.ts';
 import { cn } from '../t3/lib/utils.ts';
-import { MessageAttachments } from './composer.jsx';
+import { MessageAttachments, ProviderLogo, modelDisplayName } from './composer.jsx';
 import { useTimestampFormat, useToolCallVisibility } from './chatSettings.js';
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from './timestampFormat.js';
 import { ChatMarkdown } from './markdown.jsx';
@@ -485,13 +487,84 @@ function MessageBlock({ message, meta, metaVisible }) {
   );
 }
 
+// ─── System dividers (TimelineSystemDivider.tsx, V2LifecycleRow.tsx HandoffRow) ───
+
+function TimelineSystemDivider({ label, detail, icon: Icon, showDetailSeparator = true }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 py-2 text-2xs text-muted-foreground">
+      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
+      <span className="flex min-w-0 flex-wrap items-center justify-center gap-1.5 rounded-full px-2 py-1">
+        <span className="inline-flex items-baseline gap-1.5 align-baseline font-medium">
+          {Icon ? <Icon className="size-3 shrink-0 self-center" /> : null}
+          {label}
+        </span>
+        {detail ? (
+          <span className="inline-flex min-w-0 items-center opacity-70">
+            {showDetailSeparator ? '·\u00a0' : null}
+            {detail}
+          </span>
+        ) : null}
+      </span>
+      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
+    </div>
+  );
+}
+
+function HandoffEndpoint({ endpoint, providers }) {
+  const label = modelDisplayName(endpoint.model);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            className="inline-flex min-w-0 items-center gap-1.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          />
+        }
+      >
+        <ProviderLogo providers={providers} slug={endpoint.provider} model={endpoint.model} className="size-3.5 text-foreground" />
+        <span className="truncate font-medium text-foreground">{label}</span>
+      </TooltipTrigger>
+      <TooltipPopup>
+        {endpoint.provider ? `${endpoint.provider} · ` : ''}
+        {endpoint.model}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function HandoffRow({ handoff, providers }) {
+  return (
+    <TimelineSystemDivider
+      label="Context handoff"
+      icon={ArrowRightLeftIcon}
+      showDetailSeparator={false}
+      detail={
+        <span className="inline-flex min-w-0 flex-wrap items-center justify-center gap-1.5">
+          {handoff.from ? (
+            <>
+              <HandoffEndpoint endpoint={handoff.from} providers={providers} />
+              <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0" />
+            </>
+          ) : null}
+          <HandoffEndpoint endpoint={handoff.to} providers={providers} />
+        </span>
+      }
+    />
+  );
+}
+
 // ─── Timeline ───
 
 export function splitTurns(messages) {
   const turns = [];
   let current = { user: null, items: [] };
   for (const message of messages) {
-    if (message.role === 'user') {
+    if (message.role === 'handoff') {
+      if (current.user || current.items.length) turns.push(current);
+      turns.push({ handoff: message, user: null, items: [] });
+      current = { user: null, items: [] };
+    } else if (message.role === 'user') {
       if (current.user || current.items.length) turns.push(current);
       current = { user: message, items: [] };
     } else {
@@ -577,12 +650,20 @@ function Turn({ turn, live, isLast, startedAt, cwd, expanded, onToggle, visibili
   );
 }
 
-export function Timeline({ thread }) {
+export function Timeline({ thread, providers = [] }) {
   const [unfolded, setUnfolded] = useState(() => new Set());
   const visibility = useToolCallVisibility();
   const turns = splitTurns(thread.messages);
+  const lastTurn = turns.findLastIndex((turn) => !turn.handoff);
   return turns.map((turn, index) => {
-    const isLast = index === turns.length - 1;
+    if (turn.handoff) {
+      return (
+        <div key={index} data-timeline-turn={index}>
+          <HandoffRow handoff={turn.handoff} providers={providers} />
+        </div>
+      );
+    }
+    const isLast = index === lastTurn;
     return (
       <div key={index} className="flex min-w-0 flex-col gap-1" data-timeline-turn={index}>
         <Turn

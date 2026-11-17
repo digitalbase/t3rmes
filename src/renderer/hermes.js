@@ -200,8 +200,18 @@ function applyEvent(thread, type, payload = {}) {
         messages,
       };
     }
-    case 'session.info':
-      return { ...thread, ...infoFields(thread, payload) };
+    case 'session.info': {
+      const next = { ...thread, ...infoFields(thread, payload) };
+      // A switch the user asked for lands once Hermes reports the new model (now, or at the next turn
+      // start when it was queued mid-turn). Other model changes, like a lazy resume's default, are not handoffs.
+      const requested = thread.requestedSwitch;
+      if (requested && payload.model && payload.model !== requested.from.model) {
+        next.requestedSwitch = null;
+        const to = { model: payload.model, provider: payload.provider || requested.to.provider };
+        if (messages.length) next.messages = insertHandoff(messages, { role: 'handoff', from: requested.from, to, at: Date.now() }, thread.running);
+      }
+      return next;
+    }
     case 'error':
       return {
         ...thread,
@@ -255,6 +265,37 @@ export function parseUserMessage(raw) {
     return { id: ref, kind, name: path.split('/').pop() || path, path };
   };
   return { text: text.trim(), attachments: [...refs.map((r) => attachment(r, 'image')), ...files.map((r) => attachment(r, 'file'))] };
+}
+
+// A switch queued during a turn lands when the next turn starts, so it goes before that turn's prompt.
+function insertHandoff(messages, handoff, running) {
+  const index = running ? messages.findLastIndex((m) => m.role === 'user') : -1;
+  return index < 0 ? [...messages, handoff] : [...messages.slice(0, index), handoff, ...messages.slice(index)];
+}
+
+// tui_gateway/server.py _append_model_switch_marker.
+const MODEL_SWITCH_RE = /^\[System: The active model for this chat has changed to (.+?)(?: via provider (\S+))?\. From this point/;
+
+// session.resume drops Hermes' model-switch markers; the stored rows keep them, so place them by time.
+// Hermes retires all but the newest marker, so older switches may be missing and the first has no "from".
+function withHandoffs(messages, rows = []) {
+  const switches = rows
+    .map((row) => {
+      const match = row?.display_kind === 'model_switch' && typeof row.content === 'string' ? row.content.match(MODEL_SWITCH_RE) : null;
+      return match && typeof row.timestamp === 'number' ? { to: { model: match[1], provider: match[2] || null }, at: row.timestamp * 1000 } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.at - b.at);
+  const out = [...messages];
+  let from = null;
+  for (const { to, at } of switches) {
+    const index = out.findIndex((m) => m.role === 'user' && m.at && m.at >= at);
+    const handoff = { role: 'handoff', from, to, at };
+    if (index < 0) out.push(handoff);
+    else out.splice(index, 0, handoff);
+    from = to;
+  }
+  return out;
 }
 
 function historyToMessages(history = []) {
@@ -434,7 +475,10 @@ export function useHermes() {
       if (!thread || thread.sessionId || !thread.storedId || thread.loading) return;
       updateThread(key, (t) => ({ ...t, loading: true }));
       try {
-        const result = await bridge.request('session.resume', { session_id: thread.storedId });
+        const [result, stored] = await Promise.all([
+          bridge.request('session.resume', { session_id: thread.storedId }),
+          bridge.sessions.messages(thread.storedId).catch(() => null),
+        ]);
         updateThread(key, (t) => ({
           ...t,
           loading: false,
@@ -442,7 +486,7 @@ export function useHermes() {
           ...infoFields(t, result.info),
           running: Boolean(result.running),
           runningSince: result.running ? t.runningSince ?? Date.now() : t.runningSince,
-          messages: historyToMessages(result.messages),
+          messages: withHandoffs(historyToMessages(result.messages), stored?.messages ?? stored?.data),
         }));
       } catch (error) {
         updateThread(key, (t) => ({ ...t, loading: false, messages: [{ role: 'error', text: error.message }] }));
@@ -520,14 +564,21 @@ export function useHermes() {
   );
 
   // Resolves to { confirm_message } when Hermes wants the switch confirmed (expensive model).
+  // `from` is the pick the composer showed; the timeline marks the handoff once Hermes confirms the switch.
   const selectModel = useCallback(
-    (provider, model, { confirmed = false } = {}) =>
-      configure('model', { provider, model }, {
+    async (provider, model, { confirmed = false, from = null } = {}) => {
+      const key = activeKeyRef.current;
+      const live = threadsRef.current.find((t) => t.key === key)?.sessionId;
+      if (live && from?.model) updateThread(key, (t) => ({ ...t, requestedSwitch: { from, to: { model, provider } } }));
+      const result = await configure('model', { provider, model }, {
         key: 'model',
         value: `${model} --provider ${provider}`,
         ...(confirmed ? { confirm_expensive_model: true } : {}),
-      }),
-    [configure],
+      });
+      if (result?.confirm_required) updateThread(key, (t) => ({ ...t, requestedSwitch: null }));
+      return result;
+    },
+    [configure, updateThread],
   );
   const setEffort = useCallback((effort) => configure('effort', { effort }, { key: 'reasoning', value: effort }), [configure]);
   const setFast = useCallback((fast) => configure('fast', { fast }, { key: 'fast', value: fast ? 'fast' : 'normal' }), [configure]);

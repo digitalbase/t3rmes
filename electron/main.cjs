@@ -55,6 +55,10 @@ ipcMain.handle('hermes:sessions:search', (_event, query) =>
   hermes.rest('GET', `/api/sessions/search?q=${encodeURIComponent(query)}&limit=20`),
 );
 ipcMain.handle('hermes:sessions:update', (_event, id, patch) => hermes.updateSession(id, patch));
+// Stored rows keep display-only timeline markers (model switches) that session.resume drops.
+ipcMain.handle('hermes:sessions:messages', (_event, id) =>
+  hermes.rest('GET', `/api/sessions/${encodeURIComponent(id)}/messages?order=latest&limit=500&inline_images=false`),
+);
 // Runtime-side files (e.g. a turn's `@image:` upload) as a data URL, like Hermes Desktop's remote fs.
 ipcMain.handle('hermes:fs:read-data-url', async (_event, filePath, sessionId) => {
   const query = `path=${encodeURIComponent(filePath)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`;

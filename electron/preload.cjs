@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('t3rmes', {
     list: () => ipcRenderer.invoke('hermes:sessions:list'),
     search: (query) => ipcRenderer.invoke('hermes:sessions:search', query),
     update: (id, patch) => ipcRenderer.invoke('hermes:sessions:update', id, patch),
+    messages: (id) => ipcRenderer.invoke('hermes:sessions:messages', id),
   },
   readFileDataUrl: (path, sessionId) => ipcRenderer.invoke('hermes:fs:read-data-url', path, sessionId),
   showContextMenu: (items) => ipcRenderer.invoke('context-menu:show', items),
