@@ -172,7 +172,7 @@ function App() {
         }}
       >
         <SidebarHeader className="drag-region relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-4 py-0">
-          <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight text-foreground">
+          <span className="inline-flex min-w-0 items-baseline text-sm font-medium tracking-tight text-foreground">
             <span className="font-semibold">T3</span>
             <span className="truncate text-muted-foreground">rmes</span>
           </span>
@@ -226,7 +226,7 @@ function ConnectionSwitcher({ hermes, onManage }) {
     <Menu>
       <MenuTrigger
         render={
-          <SidebarMenuButton className="h-8 min-w-0 flex-1 text-sidebar-muted-foreground hover:text-sidebar-foreground data-[popup-open]:text-sidebar-foreground" />
+          <SidebarMenuButton className="h-8 min-w-0 flex-1 px-2 text-sidebar-muted-foreground hover:text-sidebar-foreground data-[popup-open]:text-sidebar-foreground" />
         }
       >
         {active?.kind === 'local' ? <MonitorIcon /> : <GlobeIcon />}
@@ -302,10 +302,10 @@ function projectLabel(thread) {
 }
 
 const STATUS_PRESENTATION = {
-  working: { label: 'Working', Icon: CircleDashedIcon, className: 'text-sky-600 dark:text-sky-400' },
+  working: { label: 'Working', Icon: CircleDashedIcon, className: 'text-info-foreground' },
   waiting: { label: 'Input', Icon: MessageCircleQuestionIcon, className: 'text-indigo-600 dark:text-indigo-300' },
-  failed: { label: 'Failed', Icon: CircleAlertIcon, className: 'text-red-700 dark:text-red-300' },
-  unread: { label: 'Done', Icon: CircleCheckIcon, className: 'text-emerald-700 dark:text-emerald-300' },
+  failed: { label: 'Failed', Icon: CircleAlertIcon, className: 'text-error-foreground' },
+  unread: { label: 'Done', Icon: CircleCheckIcon, className: 'text-success-foreground' },
 };
 
 function useShelfExpanded(storageKey) {
@@ -873,10 +873,11 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported
   const status = threadStatus(thread);
   const topStatus = status ? STATUS_PRESENTATION[status] : null;
   const isUnread = status === 'unread';
-  // Hermes' is_active (open, touched within 5 min) keeps a card at full
-  // strength; stale history recedes the way T3 dims background rows.
-  const shouldRecede = !isActive && !status && !thread.isActive && Boolean(thread.storedId);
-  const project = projectLabel(thread);
+  // Sidebar.logic shouldRecedeSidebarThread: read idle threads and background work recede;
+  // the open, selected, waiting, failed and unread ones stay at full strength.
+  const shouldRecede = !isActive && !isSelected && (status === null || status === 'working');
+  // Placeholder until Hermes profiles are wired: every card shows the default profile.
+  const project = 'default';
   const model = modelLabel(thread.model);
   const stop = (fn) => (event) => {
     event.stopPropagation();
@@ -908,12 +909,10 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported
         shouldRecede ? 'font-normal' : 'font-medium',
         variant === 'card'
           ? shouldRecede
-            ? 'text-secondary-label'
-            : isUnread || status === 'waiting'
-              ? 'text-foreground'
-              : status === 'failed'
-                ? 'text-foreground/95'
-                : 'text-foreground/90'
+            ? 'text-foreground/75 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground'
+            : status === 'failed'
+              ? 'text-foreground/95'
+              : 'text-foreground'
           : cn(
               'group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground',
               isActive ? 'text-foreground' : isUnread ? 'text-muted-foreground' : 'text-secondary-label/70',
@@ -998,12 +997,13 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported
       >
         <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
+            {/* T3: left of the status slot, so hover's wider row controls don't slide it. */}
+            {pinIndicator}
             {project ? (
-              <span className={cn('min-w-0 flex-1 truncate text-secondary-label text-xs', shouldRecede ? 'font-normal' : 'font-medium')}>{project}</span>
+              <span className="min-w-0 flex-1 truncate font-normal text-secondary-label text-xs">{project}</span>
             ) : (
               <span className="flex-1" />
             )}
-            {pinIndicator}
             <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
               <span
                 className={cn(
@@ -1052,11 +1052,11 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
             {thread.branch ? (
               <>
-                <GitBranchIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/40" />
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap text-muted-foreground/40">{thread.branch}</span>
+                <GitBranchIcon aria-hidden className="size-3 shrink-0" />
+                <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
               </>
             ) : model ? (
-              <span className="min-w-0 flex-1 truncate whitespace-nowrap text-muted-foreground/40">{model}</span>
+              <span className="min-w-0 flex-1 truncate whitespace-nowrap">{model}</span>
             ) : (
               <span className="flex-1" />
             )}
@@ -1178,16 +1178,11 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <PageHeader>
         <h2 className="min-w-0 truncate text-sm font-medium text-foreground">{threadTitle(thread)}</h2>
-        <span className="inline-flex h-5 items-center gap-1.5 rounded-full border border-border px-2 text-[11px] text-muted-foreground">
-          <span className={cn('size-1.5 rounded-full', stateTone(connectionState))} />
-          {connection?.label ?? 'Hermes'}
-          {connectionState !== 'ready' && <span className="text-muted-foreground/70">· {STATE_LABELS[connectionState]}</span>}
-        </span>
       </PageHeader>
       {isEmpty ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-8 px-5 pb-[12vh]">
           <h1 className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
-            What should we build?
+            What do you want to work on?
           </h1>
           <div className="flex w-full flex-col gap-3">
             {banner}
