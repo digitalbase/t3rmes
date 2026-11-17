@@ -24,18 +24,3 @@ body {
   -webkit-app-region: no-drag;
 }
 
-@keyframes t3rmes-blink {
-  50% {
-    opacity: 0;
-  }
-}
-
-.t3rmes-cursor {
-  display: inline-block;
-  width: 0.45rem;
-  height: 1em;
-  margin-left: 2px;
-  vertical-align: -0.15em;
-  background: currentColor;
-  animation: t3rmes-blink 1s steps(2, start) infinite;
-}

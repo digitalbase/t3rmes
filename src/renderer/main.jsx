@@ -74,12 +74,12 @@ import { threadStatus, threadTitle, useHermes } from './hermes.js';
 import {
   ComposerAttachButton,
   ComposerAttachmentStrip,
-  MessageAttachments,
   ProviderModelPicker,
   toAttachment,
   useComposerSelection,
 } from './composer.jsx';
 import { AppearanceSettings } from './AppearanceSettings.jsx';
+import { Timeline } from './timeline.jsx';
 import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
 import '@fontsource-variable/inter';
 import './styles.css';
@@ -1176,11 +1176,9 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
       ) : (
         <>
           <div ref={scrollRef} className="topbar-scroll-fade min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-6 px-5 pt-6 pb-8">
+            <div className="mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-3 px-5 pt-6 pb-8">
               {thread.loading && <Spinner className="mx-auto size-4 text-muted-foreground" />}
-              {thread.messages.map((message, index) => (
-                <MessageRow key={index} message={message} />
-              ))}
+              <Timeline key={thread.key} thread={thread} />
             </div>
           </div>
           <div className="flex flex-col gap-3 px-5 pb-5">
@@ -1204,44 +1202,6 @@ function ConnectionBanner({ text, action }) {
 
 function Spinner({ className }) {
   return <LoaderCircleIcon aria-label="Loading" role="status" className={cn('animate-spin', className)} />;
-}
-
-function MessageRow({ message }) {
-  if (message.role === 'user') {
-    return (
-      <div className="group flex flex-col items-end gap-1">
-        <MessageAttachments attachments={message.attachments} />
-        {message.text && (
-          <div className="relative max-w-[80%] whitespace-pre-wrap rounded-2xl bg-message p-3 text-sm leading-relaxed text-message-foreground">
-            {message.text}
-          </div>
-        )}
-      </div>
-    );
-  }
-  if (message.role === 'tool') {
-    return (
-      <div className="flex min-w-0 items-center gap-2 px-1 text-xs text-muted-foreground">
-        {message.running ? <Spinner className="size-3" /> : <WrenchIcon className="size-3 shrink-0" />}
-        <span className="shrink-0 font-medium text-foreground/80">{message.name}</span>
-        {message.context && <span className="min-w-0 truncate font-mono">{message.context}</span>}
-      </div>
-    );
-  }
-  if (message.role === 'error') {
-    return <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-[13px] text-destructive-foreground">{message.text}</div>;
-  }
-  if (message.role === 'notice') {
-    return <div className="px-1 text-xs text-muted-foreground">{message.text}</div>;
-  }
-  return (
-    <div className="relative min-w-0 px-1 py-0.5">
-      <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-        {message.text}
-        {message.streaming && <span className="t3rmes-cursor text-muted-foreground" />}
-      </div>
-    </div>
-  );
 }
 
 // Read-only: Hermes reports the session's branch but has no checkout or branch switching.

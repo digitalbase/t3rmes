@@ -103,6 +103,28 @@ function ensureAssistant(messages) {
   return last?.role === 'assistant' && last.streaming ? messages : [...messages, { role: 'assistant', text: '', streaming: true }];
 }
 
+// Reasoning streams before the reply: it lands ahead of an empty streaming placeholder.
+function appendReasoning(messages, text) {
+  const last = messages[messages.length - 1];
+  const placeholder = last?.role === 'assistant' && last.streaming && !last.text;
+  const head = placeholder ? messages.slice(0, -1) : messages;
+  const prev = head[head.length - 1];
+  const next =
+    prev?.role === 'reasoning' && prev.streaming
+      ? [...head.slice(0, -1), { ...prev, text: prev.text + text }]
+      : [...closeAssistant(head), { role: 'reasoning', text, streaming: true }];
+  return placeholder ? [...next, last] : next;
+}
+
+const closeReasoning = (messages) => messages.map((m) => (m.role === 'reasoning' && m.streaming ? { ...m, streaming: false } : m));
+
+function toolFailed(result) {
+  if (!result || typeof result !== 'object') return false;
+  if (result.success === false) return true;
+  if (typeof result.exit_code === 'number' && result.exit_code !== 0) return true;
+  return Boolean(result.error);
+}
+
 function applyEvent(thread, type, payload = {}) {
   let messages = thread.messages;
   switch (type) {
@@ -110,19 +132,38 @@ function applyEvent(thread, type, payload = {}) {
       return { ...thread, running: true, failed: false, runningSince: thread.runningSince ?? Date.now(), messages: ensureAssistant(messages) };
     case 'message.delta': {
       if (!payload.text) return thread;
-      messages = ensureAssistant(messages);
+      messages = ensureAssistant(closeReasoning(messages));
       const last = messages[messages.length - 1];
       return { ...thread, messages: [...messages.slice(0, -1), { ...last, text: last.text + payload.text }] };
     }
+    case 'reasoning.delta':
+      if (!payload.text) return thread;
+      return { ...thread, messages: appendReasoning(messages, payload.text) };
     case 'tool.start':
       return {
         ...thread,
-        messages: [...closeAssistant(messages), { role: 'tool', id: payload.tool_id, name: payload.name, context: payload.context, running: true }],
+        messages: [
+          ...closeAssistant(messages),
+          { role: 'tool', id: payload.tool_id, name: payload.name, context: payload.context, args: payload.args, running: true, at: Date.now() },
+        ],
       };
     case 'tool.complete':
       return {
         ...thread,
-        messages: messages.map((m) => (m.role === 'tool' && m.id === payload.tool_id ? { ...m, running: false, summary: payload.summary } : m)),
+        messages: messages.map((m) =>
+          m.role === 'tool' && m.id === payload.tool_id
+            ? {
+                ...m,
+                running: false,
+                args: payload.args ?? m.args,
+                summary: payload.summary,
+                durationMs: typeof payload.duration_s === 'number' ? payload.duration_s * 1000 : null,
+                failed: toolFailed(payload.result),
+                result: payload.result,
+                inlineDiff: payload.inline_diff,
+              }
+            : m,
+        ),
       };
     case 'message.complete': {
       const failed = payload.status === 'error';
@@ -135,7 +176,20 @@ function applyEvent(thread, type, payload = {}) {
       if (failed && messages[messages.length - 1]?.role !== 'error') {
         messages = [...closeAssistant(messages), { role: 'error', text: payload.error || 'Hermes reported an error.' }];
       }
-      if (payload.status === 'interrupted') messages.push({ role: 'notice', text: 'Interrupted' });
+      messages = closeAssistant(messages).map((m) => (m.role === 'tool' ? { ...m, running: false } : m));
+      // The turn's span, for the "Worked for" fold; stamped on the reply that ends it.
+      const lastIndex = messages.findLastIndex((m) => m.role === 'assistant');
+      const turnStart = messages.findLastIndex((m) => m.role === 'user');
+      if (lastIndex > turnStart) {
+        messages[lastIndex] = {
+          ...messages[lastIndex],
+          at: Date.now(),
+          workedMs: thread.runningSince ? Date.now() - thread.runningSince : null,
+          interrupted: payload.status === 'interrupted',
+        };
+      } else if (payload.status === 'interrupted') {
+        messages.push({ role: 'notice', text: 'Interrupted' });
+      }
       return {
         ...thread,
         running: false,
@@ -143,7 +197,7 @@ function applyEvent(thread, type, payload = {}) {
         liveStatus: null,
         failed,
         lastActive: Date.now() / 1000,
-        messages: closeAssistant(messages).map((m) => (m.role === 'tool' ? { ...m, running: false } : m)),
+        messages,
       };
     }
     case 'session.info':
@@ -162,9 +216,23 @@ function applyEvent(thread, type, payload = {}) {
 }
 
 function historyToMessages(history = []) {
-  return history
-    .filter((m) => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'tool'))
-    .map((m) => (m.role === 'tool' ? { role: 'tool', name: m.name, context: m.context } : { role: m.role, text: m.text || '' }));
+  const messages = [];
+  let turnStartedAt = null;
+  for (const m of history) {
+    if (!m) continue;
+    const at = typeof m.timestamp === 'number' ? m.timestamp * 1000 : null;
+    if (m.role === 'tool') {
+      messages.push({ role: 'tool', name: m.name, context: m.context, args: m.args });
+    } else if (m.role === 'user') {
+      turnStartedAt = at;
+      messages.push({ role: 'user', text: m.text || '', at });
+    } else if (m.role === 'assistant') {
+      const reasoning = typeof m.reasoning === 'string' ? m.reasoning : typeof m.reasoning_content === 'string' ? m.reasoning_content : '';
+      if (reasoning.trim()) messages.push({ role: 'reasoning', text: reasoning });
+      if (m.text) messages.push({ role: 'assistant', text: m.text, at, workedMs: at && turnStartedAt ? at - turnStartedAt : null });
+    }
+  }
+  return messages;
 }
 
 // The thread's Hermes-derived status: working | waiting | failed | unread | null.
