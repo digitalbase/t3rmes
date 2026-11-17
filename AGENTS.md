@@ -4,7 +4,8 @@ A small, fast Electron + React desktop client for Hermes that looks exactly like
 
 ## Goals
 
-- Match T3 Code. When a screen differs from T3, T3 is right. Port from upstream T3 sources before inventing UI.
+- Match T3 Code. When a screen differs from T3, T3 is right.
+- When in doubt about how to build something, use the T3 components. Look in `src/t3` first, then in upstream T3, and port what you need. Only create a new component when T3 has nothing that fits.
 - Stay lean and fast, unlike Hermes Desktop. Keep the renderer small. Prefer good defaults to new settings.
 - Follow Hermes semantics. Don't invent features Hermes lacks; for example, there is no snooze.
 
@@ -14,17 +15,16 @@ A small, fast Electron + React desktop client for Hermes that looks exactly like
 - Keep `npm run dev` running so the user can test. Restart it after editing `electron/` (main or preload):
   ```
   pkill -f "concurrently -k"; pkill -f "electron \."; pkill -f "vite --host 127.0.0.1 --port 5175"
-  npm run dev > /tmp/opencode/t3rmes-dev.log 2>&1   # background, repo root
+  npm run dev > /tmp/t3rmes-dev.log 2>&1   # background, repo root
   ```
 - After edits, run `NO_COLOR=1 npx vite build` to check the build.
-- This repo (`/home/gijs/Work/digitalbase/t3rmes`) is the canonical one. The `~/.t3/projects/t3rmes` and `~/.t3-stable/projects/t3rmes` dirs only forward here.
 
 ## Testing the UI
 
 Drive the dev window over the Chrome DevTools Protocol. In dev, `electron/main.cjs` opens port 9333 on 127.0.0.1. OS mouse control isn't available because `ydotool`/`dotool` aren't installed.
 
 ```
-node scripts/cdp.mjs shot /tmp/opencode/x.png       # screenshot, then read the PNG
+node scripts/cdp.mjs shot /tmp/x.png       # screenshot, then read the PNG
 node scripts/cdp.mjs click '[aria-label="Settings"]'
 node scripts/cdp.mjs clickxy 100 200
 node scripts/cdp.mjs type 'hello'
@@ -36,7 +36,7 @@ Verify visual changes with a screenshot, in both light and dark mode when colour
 
 ## T3 sources
 
-- The vendored T3 UI lives in `src/t3`, synced from upstream T3 at `/home/gijs/Work/digitalbase/t3code`. Read upstream with `git show origin/main:apps/web/src/...`.
+- The vendored T3 UI lives in `src/t3`, synced from upstream T3 Code (`apps/web/src` in the T3 Code repo). In a checkout of T3 Code, read upstream with `git show origin/main:apps/web/src/...`.
 - Shims replace T3's settings and contracts stack. Keep them tiny:
   - `src/t3/hooks/useSettings.ts` only provides `useClientSettings`.
   - `src/t3/lib/utils.ts` only exports `cn`, `isMacPlatform` and `isWindowsPlatform`.
@@ -44,7 +44,7 @@ Verify visual changes with a screenshot, in both light and dark mode when colour
 
 ## Hermes
 
-- Never spawn plain `hermes`. Use `resolveHermesCommand()`, which resolves to `~/.local/bin/hermes`.
+- Never spawn plain `hermes`. Use `resolveHermesCommand()`.
 - Session edits are revision-fenced. Take a mutation snapshot, then PATCH with `request_id` and `expected_revision`. Retry once on 409.
 - Bulk edits go through `hermes.patchThreads`.
 
