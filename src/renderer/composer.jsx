@@ -561,21 +561,55 @@ export function ComposerAttachmentStrip({ attachments, onRemove }) {
   );
 }
 
+// Images from history live on the runtime (`@image:/opt/data/...`); fetch each once.
+const runtimeImageCache = new Map();
+
+function loadRuntimeImage(path) {
+  if (!runtimeImageCache.has(path)) {
+    const pending = (window.t3rmes?.readFileDataUrl?.(path) ?? Promise.resolve('')).catch(() => '');
+    runtimeImageCache.set(path, pending);
+  }
+  return runtimeImageCache.get(path);
+}
+
+function useAttachmentSrc(attachment) {
+  const [loaded, setLoaded] = useState(() => ({ path: null, src: '' }));
+  const path = attachment.kind === 'image' && !attachment.previewUrl ? attachment.path : null;
+  useEffect(() => {
+    if (!path) return undefined;
+    let cancelled = false;
+    loadRuntimeImage(path).then((src) => !cancelled && setLoaded({ path, src }));
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+  if (attachment.previewUrl) return { src: attachment.previewUrl, pending: false };
+  if (!path) return { src: '', pending: false };
+  return loaded.path === path ? { src: loaded.src, pending: false } : { src: '', pending: true };
+}
+
+function MessageAttachment({ attachment }) {
+  const { src, pending } = useAttachmentSrc(attachment);
+  if (attachment.kind === 'image' && pending) {
+    return <div aria-label={attachment.name} className="h-24 w-32 animate-pulse rounded-lg border border-border/80 bg-muted" />;
+  }
+  if (attachment.kind === 'image' && src) {
+    return <img src={src} alt={attachment.name} className="h-24 max-w-48 rounded-lg border border-border/80 object-cover" />;
+  }
+  return (
+    <span className="inline-flex h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border/80 bg-card px-2 text-xs text-foreground">
+      <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="truncate">{attachment.name}</span>
+    </span>
+  );
+}
+
 // Sent attachments on a user message: thumbnails and file chips.
 export function MessageAttachments({ attachments }) {
   if (!attachments?.length) return null;
   return (
     <div className="flex max-w-[80%] flex-wrap justify-end gap-2">
-      {attachments.map((attachment) =>
-        attachment.kind === 'image' && attachment.previewUrl ? (
-          <img key={attachment.id} src={attachment.previewUrl} alt={attachment.name} className="h-24 max-w-48 rounded-lg border border-border/80 object-cover" />
-        ) : (
-          <span key={attachment.id} className="inline-flex h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border/80 bg-card px-2 text-xs text-foreground">
-            <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{attachment.name}</span>
-          </span>
-        ),
-      )}
+      {attachments.map((attachment) => <MessageAttachment key={attachment.id} attachment={attachment} />)}
     </div>
   );
 }

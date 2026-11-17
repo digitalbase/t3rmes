@@ -54,6 +54,12 @@ ipcMain.handle('hermes:sessions:search', (_event, query) =>
   hermes.rest('GET', `/api/sessions/search?q=${encodeURIComponent(query)}&limit=20`),
 );
 ipcMain.handle('hermes:sessions:update', (_event, id, patch) => hermes.updateSession(id, patch));
+// Runtime-side files (e.g. a turn's `@image:` upload) as a data URL, like Hermes Desktop's remote fs.
+ipcMain.handle('hermes:fs:read-data-url', async (_event, filePath, sessionId) => {
+  const query = `path=${encodeURIComponent(filePath)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`;
+  const result = await hermes.rest('GET', `/api/fs/read-data-url?${query}`);
+  return typeof result === 'string' ? result : result?.dataUrl || '';
+});
 // Native context menu; resolves with the clicked item id or null.
 ipcMain.handle('context-menu:show', (event, items) =>
   new Promise((resolve) => {

@@ -215,6 +215,48 @@ function applyEvent(thread, type, payload = {}) {
   }
 }
 
+// Hermes Desktop chat-messages/hydration.ts displayContentForMessage + embedded-images extractImageRefs:
+// drop the expanded "--- Attached Context ---" block and lift `@image:` lines out as attachments.
+const ATTACHED_CONTEXT_MARKER_RE = /(?:^|\n)--- Attached Context ---\s*\n/;
+const CONTEXT_WARNINGS_MARKER_RE = /(?:^|\n)--- Context Warnings ---[\s\S]*$/;
+const CONTEXT_REF_RE = /@(file|folder|url|image|tool|terminal):(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|\S+)/g;
+const IMAGE_REF_LINE_RE = /^@image:[^\n]*\n?/gm;
+const SCREENSHOT_PLACEHOLDER_LINE_RE = /^\[screenshot\]\n?/gm;
+
+function userDisplayText(text) {
+  const marker = text.match(ATTACHED_CONTEXT_MARKER_RE);
+  if (!marker || marker.index === undefined) return text.replace(CONTEXT_WARNINGS_MARKER_RE, '').trim();
+  const visible = text.slice(0, marker.index).replace(CONTEXT_WARNINGS_MARKER_RE, '').trim();
+  const refs = [...new Set(Array.from(text.slice(marker.index + marker[0].length).matchAll(CONTEXT_REF_RE), (m) => m[0]))];
+  // Keep refs the prose already names in place; hoist only the missing ones.
+  const missing = refs.filter((ref) => !visible.includes(ref));
+  return [missing.join('\n'), visible].filter(Boolean).join('\n\n') || visible;
+}
+
+function unquoteRef(value) {
+  const quoted = value.match(/^(["'`])(.*)\1$/);
+  return quoted ? quoted[2] : value;
+}
+
+export function parseUserMessage(raw) {
+  const refs = [];
+  let text = userDisplayText(raw).replace(IMAGE_REF_LINE_RE, (line) => {
+    refs.push(line.trim());
+    return '';
+  });
+  if (refs.length) text = text.replace(SCREENSHOT_PLACEHOLDER_LINE_RE, '');
+  const files = [];
+  text = text.replace(/^@file:\S+[ \t]*\n?/gm, (line) => {
+    files.push(line.trim());
+    return '';
+  });
+  const attachment = (ref, kind) => {
+    const path = unquoteRef(ref.slice(ref.indexOf(':') + 1).trim());
+    return { id: ref, kind, name: path.split('/').pop() || path, path };
+  };
+  return { text: text.trim(), attachments: [...refs.map((r) => attachment(r, 'image')), ...files.map((r) => attachment(r, 'file'))] };
+}
+
 function historyToMessages(history = []) {
   const messages = [];
   let turnStartedAt = null;
@@ -225,7 +267,7 @@ function historyToMessages(history = []) {
       messages.push({ role: 'tool', name: m.name, context: m.context, args: m.args });
     } else if (m.role === 'user') {
       turnStartedAt = at;
-      messages.push({ role: 'user', text: m.text || '', at });
+      messages.push({ role: 'user', ...parseUserMessage(m.text || ''), at });
     } else if (m.role === 'assistant') {
       const reasoning = typeof m.reasoning === 'string' ? m.reasoning : typeof m.reasoning_content === 'string' ? m.reasoning_content : '';
       if (reasoning.trim()) messages.push({ role: 'reasoning', text: reasoning });
