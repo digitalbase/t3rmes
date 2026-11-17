@@ -44,7 +44,6 @@ import {
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from '../t3/components/ui/tooltip.tsx';
 import { Button } from '../t3/components/ui/button.tsx';
 import { Kbd } from '../t3/components/ui/kbd.tsx';
-import { Switch } from '../t3/components/ui/switch.tsx';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import { DialogBackdrop } from '../t3/components/ui/dialog.tsx';
 import { Input } from '../t3/components/ui/input.tsx';
@@ -80,6 +79,7 @@ import {
 } from './composer.jsx';
 import { AppearanceSettings } from './AppearanceSettings.jsx';
 import { ChatSettings } from './ChatSettings.jsx';
+import { composerRequiresModifier, useSendShortcut } from './chatSettings.js';
 import { Timeline } from './timeline.jsx';
 import { TimelineMinimap } from './minimap.jsx';
 import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
@@ -1241,6 +1241,7 @@ function ComposerContext({ branch }) {
 
 function Composer({ draft, setDraft, attachments, onAddFiles, onRemoveAttachment, running, disabled, onSubmit, onStop, modelPicker, context }) {
   const [dragging, setDragging] = useState(false);
+  const sendShortcut = useSendShortcut();
   const hasFiles = (event) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
   return (
     <div className="flex flex-col gap-2">
@@ -1288,7 +1289,10 @@ function Composer({ draft, setDraft, attachments, onAddFiles, onRemoveAttachment
             onAddFiles(files);
           }}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) onSubmit(event);
+            // T3 composerSubmissionIntentForKey, minus the keybinding commands Hermes lacks.
+            if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.repeat || event.nativeEvent.isComposing) return;
+            if (composerRequiresModifier(sendShortcut, event.currentTarget.value) && !event.metaKey && !event.ctrlKey) return;
+            onSubmit(event);
           }}
           placeholder="Ask Hermes anything…"
           rows={2}
@@ -1331,8 +1335,6 @@ function Composer({ draft, setDraft, attachments, onAddFiles, onRemoveAttachment
 }
 
 const SETTINGS_SEARCH_ITEMS = [
-  { id: 'send-on-enter', title: 'Send on Enter', section: 'general' },
-  { id: 'confirm-delete', title: 'Confirm before deleting threads', section: 'general' },
   { id: 'working-directory', title: 'Working directory', section: 'general' },
   { id: 'color-scheme', title: 'Color scheme', section: 'appearance' },
   { id: 'theme', title: 'Themes', section: 'appearance' },
@@ -1340,6 +1342,8 @@ const SETTINGS_SEARCH_ITEMS = [
   { id: 'glass-opacity', title: 'Glass opacity', section: 'appearance' },
   { id: 'chat-width', title: 'Chat width', section: 'appearance' },
   { id: 'interface-font-size', title: 'Interface font size', section: 'appearance' },
+  { id: 'send-shortcut', title: 'Send shortcut', section: 'chat' },
+  { id: 'tool-call-visibility', title: 'Tool calls in chat', section: 'chat' },
   { id: 'runtimes', title: 'Runtimes', section: 'connections' },
   { id: 'add-remote-runtime', title: 'Add remote runtime', section: 'connections' },
 ];
@@ -1545,10 +1549,6 @@ function SettingsModal({ open, section, onSectionChange, onClose, hermes }) {
                 <div className="flex min-h-0 flex-1 flex-col">
                   {section === 'general' && (
                     <SettingsPageContainer>
-                      <SettingsSection title="Behavior">
-                        <SettingsRow title="Send on Enter" description="Press Shift+Enter to insert a new line instead." control={<Switch defaultChecked />} />
-                        <SettingsRow title="Confirm before deleting threads" description="Ask before a thread is removed." control={<Switch defaultChecked />} />
-                      </SettingsSection>
                       <SettingsSection title="Workspace">
                         <SettingsRow
                           title="Working directory"
