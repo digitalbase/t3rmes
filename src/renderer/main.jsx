@@ -1143,7 +1143,7 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
           onFast={picker.setFast}
         />
       }
-      context={thread.cwd || thread.branch ? <ComposerContext cwd={thread.cwd} branch={thread.branch} /> : null}
+      context={thread.branch ? <ComposerContext branch={thread.branch} /> : null}
     />
   );
   const banner =
@@ -1244,17 +1244,11 @@ function MessageRow({ message }) {
   );
 }
 
-// Read-only: Hermes reports where the session runs but has no checkout or branch switching.
-function ComposerContext({ cwd, branch }) {
-  const folder = cwd?.replace(/\/+$/, '').split('/').pop();
+// Read-only: Hermes reports the session's branch but has no checkout or branch switching.
+function ComposerContext({ branch }) {
+  if (!branch) return null;
   return (
     <div className="mx-auto flex w-full max-w-(--chat-content-max-width) items-center gap-3 px-2 text-xs text-muted-foreground">
-      {folder && (
-        <span className="inline-flex min-w-0 items-center gap-1.5" title={cwd}>
-          <FolderIcon className="size-3.5 shrink-0" />
-          <span className="truncate">{folder}</span>
-        </span>
-      )}
       {branch && (
         <span className="inline-flex min-w-0 items-center gap-1.5">
           <GitBranchIcon className="size-3.5 shrink-0" />
