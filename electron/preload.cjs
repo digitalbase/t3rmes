@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld('t3rmes', {
   },
   readFileDataUrl: (path, sessionId) => ipcRenderer.invoke('hermes:fs:read-data-url', path, sessionId),
   showContextMenu: (items) => ipcRenderer.invoke('context-menu:show', items),
+  omarchyTheme: {
+    get: () => ipcRenderer.invoke('theme:omarchy:get'),
+    onChange: (listener) => subscribe('theme:omarchy', listener),
+  },
   onState: (listener) => subscribe('hermes:state', listener),
   onEvent: (listener) => subscribe('hermes:event', listener),
 });

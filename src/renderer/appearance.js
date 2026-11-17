@@ -2,11 +2,15 @@
 // built-in themes: a light/dark/system mode, a theme per mode ("halves"), and interface knobs.
 import { useSyncExternalStore } from 'react';
 import { BUILT_IN_THEMES, THEME_COLOR_ROLES, getThemeColorsForAppearance } from '../t3/themePalettes.ts';
+import { publishedThemeColors } from '../t3/vividTheme.ts';
 
 // Keep these keys in sync with the boot script in index.html.
 const MODE_KEY = 't3rmes:theme-appearance-mode';
 const HALVES_KEY = 't3rmes:theme-halves:v1';
 const INTERFACE_KEY = 't3rmes:appearance:v1';
+// Last Omarchy theme file, so a selected Omarchy theme paints before the main process answers.
+const OMARCHY_KEY = 't3rmes:omarchy-theme:v1';
+export const OMARCHY_THEME_ID = 'omarchy';
 
 export const MIN_APPEARANCE_CONTRAST = 50;
 export const MAX_APPEARANCE_CONTRAST = 200;
@@ -27,7 +31,19 @@ const themeVariable = (role) =>
     ? '--app-theme-terminal-selection-background'
     : `--app-theme-${role.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
 
+let omarchyTheme = null;
+
+function omarchyThemeDefinition(file) {
+  if (!file) return null;
+  try {
+    return { id: OMARCHY_THEME_ID, label: 'Omarchy', appearance: file.appearance, colors: publishedThemeColors(file) };
+  } catch {
+    return null;
+  }
+}
+
 export function getThemeDefinition(id) {
+  if (id && id === OMARCHY_THEME_ID) return omarchyTheme;
   return (id && BUILT_IN_THEMES.find((theme) => theme.id === id)) || null;
 }
 
@@ -44,6 +60,11 @@ function readHalves() {
   const raw = readJson(HALVES_KEY, {});
   const halves = {};
   for (const appearance of ['light', 'dark']) {
+    // Kept even before the Omarchy file is read; compute() falls back while it is missing.
+    if (raw[appearance] === OMARCHY_THEME_ID) {
+      halves[appearance] = OMARCHY_THEME_ID;
+      continue;
+    }
     const theme = getThemeDefinition(raw[appearance]);
     if (theme && getThemeColorsForAppearance(theme, appearance)) halves[appearance] = theme.id;
   }
@@ -75,8 +96,11 @@ let snapshot = null;
 
 function compute() {
   const mode = readMode();
-  const appearance = mode === 'system' ? (systemDarkQuery.matches ? 'dark' : 'light') : mode;
-  return { mode, appearance, halves: readHalves(), interface: readInterface() };
+  const halves = readHalves();
+  let appearance = mode === 'system' ? (systemDarkQuery.matches ? 'dark' : 'light') : mode;
+  // Omarchy ships one appearance per theme, so it decides light or dark while it is picked.
+  if (halves[appearance] === OMARCHY_THEME_ID && omarchyTheme) appearance = omarchyTheme.appearance;
+  return { mode, appearance, halves, interface: readInterface(), omarchyTheme };
 }
 
 function apply(next) {
@@ -111,8 +135,26 @@ function refresh() {
   for (const listener of listeners) listener();
 }
 
+function setOmarchyTheme(file) {
+  if (file) localStorage.setItem(OMARCHY_KEY, JSON.stringify(file));
+  else localStorage.removeItem(OMARCHY_KEY);
+  omarchyTheme = omarchyThemeDefinition(file);
+}
+
+omarchyTheme = omarchyThemeDefinition(readJson(OMARCHY_KEY, null));
 refresh();
 systemDarkQuery.addEventListener('change', refresh);
+const omarchyBridge = window.t3rmes?.omarchyTheme;
+if (omarchyBridge) {
+  omarchyBridge.get().then((file) => {
+    setOmarchyTheme(file);
+    refresh();
+  });
+  omarchyBridge.onChange((file) => {
+    setOmarchyTheme(file);
+    refresh();
+  });
+}
 window.addEventListener('storage', (event) => {
   if (event.key?.startsWith('t3rmes:')) refresh();
 });
@@ -146,7 +188,9 @@ export function setThemeHalf(appearance, themeId) {
 export function applyThemeEverywhere(themeId) {
   const theme = getThemeDefinition(themeId);
   const halves = {};
-  if (theme) for (const appearance of ['light', 'dark']) if (getThemeColorsForAppearance(theme, appearance)) halves[appearance] = theme.id;
+  // Omarchy flips between dark and light themes; keep it picked for both so it follows along.
+  if (theme?.id === OMARCHY_THEME_ID) halves.light = halves.dark = OMARCHY_THEME_ID;
+  else if (theme) for (const appearance of ['light', 'dark']) if (getThemeColorsForAppearance(theme, appearance)) halves[appearance] = theme.id;
   localStorage.setItem(HALVES_KEY, JSON.stringify(halves));
   refresh();
 }

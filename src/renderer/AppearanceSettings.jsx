@@ -86,6 +86,7 @@ function themeCard(theme) {
 
 function previewColors(themeId, mode) {
   const theme = getThemeDefinition(themeId);
+  if (theme && !getThemeColorsForAppearance(theme, mode)) return STANDARD_THEME_PREVIEW_COLORS[mode];
   return (theme && themeCard(theme).previews.find((preview) => preview.mode === mode)?.colors) ?? STANDARD_THEME_PREVIEW_COLORS[mode];
 }
 
@@ -258,7 +259,7 @@ function ThemeWireframe({ panes }) {
   );
 }
 
-function ThemeLibrary({ mode, halves }) {
+function ThemeLibrary({ mode, halves, omarchyTheme }) {
   const lightOwner = halves.light ?? null;
   const darkOwner = halves.dark ?? null;
   const pickedModesFor = (id) => [...(lightOwner === id ? ['light'] : []), ...(darkOwner === id ? ['dark'] : [])];
@@ -269,7 +270,7 @@ function ThemeLibrary({ mode, halves }) {
           { clip: 'right', colors: previewColors(darkOwner, 'dark') },
         ]
       : [{ colors: previewColors(tileMode === 'dark' ? darkOwner : lightOwner, tileMode) }];
-  const cards = [STANDARD_THEME_CARD, ...BUILT_IN_THEMES.map(themeCard)];
+  const cards = [STANDARD_THEME_CARD, ...BUILT_IN_THEMES.map(themeCard), ...(omarchyTheme ? [themeCard(omarchyTheme)] : [])];
 
   return (
     <div className="space-y-3">
@@ -351,12 +352,12 @@ function SliderRow({ title, description, label, id, min, max, value, defaultValu
 }
 
 export function AppearanceSettings() {
-  const { mode, halves, interface: settings } = useAppearance();
+  const { mode, halves, interface: settings, omarchyTheme } = useAppearance();
   const defaults = DEFAULT_INTERFACE_SETTINGS;
   return (
     <SettingsPageContainer>
       <SettingsSection title="Colors & themes" variant="plain" hideTitle>
-        <ThemeLibrary mode={mode} halves={halves} />
+        <ThemeLibrary mode={mode} halves={halves} omarchyTheme={omarchyTheme} />
       </SettingsSection>
 
       <SettingsSection title="Interface">

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, ipcMain, nativeTheme, shell } = require('electron');
 const path = require('node:path');
 const { createHermesService } = require('./hermes.cjs');
+const { readOmarchyTheme, watchOmarchyTheme } = require('./omarchyTheme.cjs');
 
 const isDev = !app.isPackaged;
 // Lets agents drive and screenshot the dev window over CDP (127.0.0.1 only).
@@ -60,6 +61,7 @@ ipcMain.handle('hermes:fs:read-data-url', async (_event, filePath, sessionId) =>
   const result = await hermes.rest('GET', `/api/fs/read-data-url?${query}`);
   return typeof result === 'string' ? result : result?.dataUrl || '';
 });
+ipcMain.handle('theme:omarchy:get', () => readOmarchyTheme());
 // Native context menu; resolves with the clicked item id or null.
 ipcMain.handle('context-menu:show', (event, items) =>
   new Promise((resolve) => {
@@ -80,6 +82,7 @@ ipcMain.handle('context-menu:show', (event, items) =>
 app.whenReady().then(() => {
   createWindow();
   hermes.start();
+  watchOmarchyTheme((theme) => mainWindow?.webContents.send('theme:omarchy', theme));
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
