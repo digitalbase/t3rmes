@@ -113,7 +113,7 @@ function SidebarProviderIcon({ provider }) {
 }
 
 function ProviderIcon({ provider, isCliProxy, className }) {
-  if (isCliProxy) return <img src={cliproxyLogo} alt="" aria-hidden="true" className={cn('size-4 shrink-0 rounded-[5px] object-cover', className)} />;
+  if (isCliProxy) return <img src={cliproxyLogo} alt="" aria-hidden="true" className={cn('size-4 shrink-0 rounded-[5px] object-cover grayscale', className)} />;
   const logo = PROVIDER_LOGOS[provider?.slug];
   if (logo) {
     return (
