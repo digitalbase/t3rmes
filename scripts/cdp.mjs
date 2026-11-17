@@ -5,7 +5,7 @@
 //   node scripts/cdp.mjs click '<css selector>'  real mouse click at the element's center
 //   node scripts/cdp.mjs clickxy <x> <y>         real mouse click at CSS pixels
 //   node scripts/cdp.mjs type '<text>'           type into the focused element
-//   node scripts/cdp.mjs key <Key>               press a key, e.g. Escape, Enter
+//   node scripts/cdp.mjs key <Key>               press a key, e.g. Escape, Control+1
 import { writeFileSync } from 'node:fs';
 
 const [cmd, ...args] = process.argv.slice(2);
@@ -67,9 +67,14 @@ if (cmd === 'shot') {
 } else if (cmd === 'type') {
   await send('Input.insertText', { text: args[0] });
 } else if (cmd === 'key') {
-  const key = args[0];
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode: { Escape: 27, Enter: 13 }[key] ?? 0 });
-  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key });
+  // Modifiers as a prefix, e.g. Control+Shift+ArrowDown.
+  const parts = args[0].split('+');
+  const key = parts.pop();
+  const modifiers = parts.reduce((bits, name) => bits | ({ Alt: 1, Control: 2, Meta: 4, Shift: 8 }[name] ?? 0), 0);
+  const code = /^[0-9]$/.test(key) ? `Digit${key}` : key;
+  const windowsVirtualKeyCode = { Escape: 27, Enter: 13, ArrowUp: 38, ArrowDown: 40 }[key] ?? (/^[0-9]$/.test(key) ? key.charCodeAt(0) : 0);
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers, windowsVirtualKeyCode });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers, windowsVirtualKeyCode });
   await sleep(250);
 } else {
   console.error('usage: shot | eval <js> | click <selector> | clickxy <x> <y> | type <text> | key <Key>');

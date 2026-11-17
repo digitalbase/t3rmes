@@ -1,10 +1,14 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { CheckIcon, FileIcon, PaperclipIcon, XIcon, ZapIcon } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { CheckIcon, FileIcon, PaperclipIcon, StarIcon, XIcon, ZapIcon } from 'lucide-react';
 import { Popover, PopoverPopup, PopoverTrigger } from '../t3/components/ui/popover.tsx';
 import { Combobox, ComboboxEmpty, ComboboxItem, ComboboxList, ComboboxSearchInput } from '../t3/components/ui/combobox.tsx';
 import { Button } from '../t3/components/ui/button.tsx';
+import { Kbd } from '../t3/components/ui/kbd.tsx';
 import { Tooltip, TooltipPopup, TooltipTrigger } from '../t3/components/ui/tooltip.tsx';
 import { cn } from '../t3/lib/utils.ts';
+import nousLogo from './icons/nousresearch.svg?url';
+import openaiLogo from './icons/openai.svg?url';
+import openrouterLogo from './icons/openrouter.svg?url';
 
 // Hermes' levels (hermes_constants.VALID_REASONING_EFFORTS); `none` is thinking off.
 const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -62,7 +66,19 @@ function ComposerControl({ className, ...props }) {
 }
 
 const PROVIDER_TINTS = ['bg-violet-500/15 text-violet-600 dark:text-violet-300', 'bg-sky-500/15 text-sky-600 dark:text-sky-300', 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300', 'bg-amber-500/15 text-amber-700 dark:text-amber-300', 'bg-rose-500/15 text-rose-600 dark:text-rose-300'];
+// Brand marks: Nous Research and OpenAI from LobeHub Icons (MIT), OpenRouter from Simple Icons (CC0).
+const PROVIDER_LOGOS = { nous: nousLogo, openrouter: openrouterLogo, openai: openaiLogo, 'openai-codex': openaiLogo };
 function ProviderIcon({ provider, className }) {
+  const logo = PROVIDER_LOGOS[provider?.slug];
+  if (logo) {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn('size-4 shrink-0 bg-current', className)}
+        style={{ mask: `url("${logo}") center / contain no-repeat`, WebkitMask: `url("${logo}") center / contain no-repeat` }}
+      />
+    );
+  }
   const name = provider?.name || provider?.slug || '?';
   const tint = PROVIDER_TINTS[[...(provider?.slug || name)].reduce((sum, c) => sum + c.charCodeAt(0), 0) % PROVIDER_TINTS.length];
   return (
@@ -91,30 +107,101 @@ export function useComposerSelection(thread, modelOptions, defaults) {
 
 const modelKey = (slug, model) => `${slug}\u0000${model}`;
 
+// Favorite models, as provider\0model keys. Local to this app: Hermes keeps no favorites.
+const FAVORITES_KEY = 't3rmes:model-favorites';
+const favoriteListeners = new Set();
+const readFavorites = () => localStorage.getItem(FAVORITES_KEY) ?? '[]';
+function useFavorites() {
+  const raw = useSyncExternalStore((listener) => {
+    favoriteListeners.add(listener);
+    return () => favoriteListeners.delete(listener);
+  }, readFavorites);
+  const favorites = useMemo(() => {
+    try {
+      return new Set(JSON.parse(raw));
+    } catch {
+      return new Set();
+    }
+  }, [raw]);
+  const toggle = (key) => {
+    const next = new Set(favorites);
+    next.has(key) ? next.delete(key) : next.add(key);
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...next]));
+    favoriteListeners.forEach((listener) => listener());
+  };
+  return [favorites, toggle];
+}
+
+const IS_MAC = /mac/i.test(navigator.platform);
+const jumpLabel = (index) => (index < 9 ? (IS_MAC ? `⌘${index + 1}` : `Ctrl+${index + 1}`) : null);
+
 // T3 ProviderModelPicker + ModelPickerContent + ComposerEffortColumn + ComposerPickerFooter, simplified for Hermes.
 export function ProviderModelPicker({ selection, loading, disabled, onOpen, onSelectModel, onEffort, onFast }) {
   const { providers, provider, model, caps, effort, fast } = selection;
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState(null);
   const [query, setQuery] = useState('');
+  const [favorites, toggleFavorite] = useFavorites();
   const searchInputRef = useRef(null);
-  const activeTab = providers.find((p) => p.slug === tab) || provider || providers[0] || null;
   const folded = query.trim().toLowerCase();
+
+  // Favorites that this runtime still offers, in provider order.
+  const favoriteRows = useMemo(() => {
+    const entries = [];
+    for (const p of providers) for (const slug of p.models || []) if (favorites.has(modelKey(p.slug, slug))) entries.push({ provider: p, model: slug });
+    return entries;
+  }, [providers, favorites]);
+  const tabs = [...(favoriteRows.length ? ['favorites'] : []), ...providers.filter((p) => p.authenticated !== false).map((p) => p.slug)];
+  // T3 opens on Favorites when there are any, else on the provider the session runs on.
+  const activeTab = tabs.includes(tab) ? tab : favoriteRows.length ? 'favorites' : provider?.slug || providers[0]?.slug || null;
+  const tabProvider = providers.find((p) => p.slug === activeTab) || null;
 
   const rows = useMemo(() => {
     const entries = [];
     const add = (p, slug) => entries.push({ key: modelKey(p.slug, slug), provider: p, model: slug, name: modelDisplayName(slug) });
     if (folded) {
       for (const p of providers) for (const slug of p.models || []) if (`${slug} ${modelDisplayName(slug)} ${p.name}`.toLowerCase().includes(folded)) add(p, slug);
-    } else if (activeTab) {
-      const featured = activeTab.featured_models || [];
-      for (const slug of featured) add(activeTab, slug);
-      for (const slug of activeTab.models || []) if (!featured.includes(slug)) add(activeTab, slug);
+    } else if (activeTab === 'favorites') {
+      for (const { provider: p, model: slug } of favoriteRows) add(p, slug);
+    } else if (tabProvider) {
+      const featured = tabProvider.featured_models || [];
+      const ordered = [...featured, ...(tabProvider.models || []).filter((slug) => !featured.includes(slug))];
+      // Favorites lead their provider's list, as in T3.
+      for (const slug of ordered) if (favorites.has(modelKey(tabProvider.slug, slug))) add(tabProvider, slug);
+      for (const slug of ordered) if (!favorites.has(modelKey(tabProvider.slug, slug))) add(tabProvider, slug);
     }
     return entries;
-  }, [providers, activeTab, folded]);
+  }, [providers, activeTab, tabProvider, favoriteRows, favorites, folded]);
   const keys = rows.map((row) => row.key);
   const activeKey = provider && model ? modelKey(provider.slug, model) : null;
+  const showProviderName = Boolean(folded) || activeTab === 'favorites';
+
+  // T3 model picker shortcuts: mod+1..9 picks a visible model, mod+shift+up/down changes provider.
+  const shortcutsRef = useRef(null);
+  shortcutsRef.current = { rows, tabs, activeTab, onSelectModel };
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event) => {
+      if (!(IS_MAC ? event.metaKey : event.ctrlKey) || event.altKey || event.repeat || event.isComposing) return;
+      const { rows, tabs, activeTab, onSelectModel } = shortcutsRef.current;
+      if (event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        event.preventDefault();
+        event.stopPropagation();
+        const index = tabs.indexOf(activeTab);
+        setTab(tabs[(index + (event.key === 'ArrowDown' ? 1 : -1) + tabs.length) % tabs.length]);
+        setQuery('');
+        return;
+      }
+      if (event.shiftKey || !/^[1-9]$/.test(event.key)) return;
+      const row = rows[Number(event.key) - 1];
+      if (!row) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onSelectModel(row.provider.slug, row.model);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [open]);
 
   const levels = caps?.reasoning === false ? [] : [...(caps?.can_disable_reasoning ? ['none'] : []), ...REASONING_EFFORTS];
   const name = modelDisplayName(model);
@@ -137,7 +224,6 @@ export function ProviderModelPicker({ selection, loading, disabled, onOpen, onSe
         render={<ComposerControl aria-label={`Model: ${label}`} disabled={disabled} className="min-w-0 shrink justify-between" data-chat-provider-model-picker="true" />}
       >
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          {provider && <ProviderIcon provider={provider} />}
           <span className="min-w-0 max-w-56 flex-1 truncate" data-chat-provider-model-picker-label="true">
             {label}
           </span>
@@ -147,7 +233,7 @@ export function ProviderModelPicker({ selection, loading, disabled, onOpen, onSe
         <div className="flex max-h-(--available-height) flex-col">
           <div className="flex h-86.5 min-h-0">
             <div className="relative flex w-screen max-w-90 flex-row overflow-hidden" data-model-picker-content="true">
-              <ProviderSidebar providers={providers} selected={folded ? null : activeTab?.slug} current={provider?.slug} onSelect={(slug) => { setTab(slug); setQuery(''); searchInputRef.current?.focus(); }} />
+              <ProviderSidebar providers={providers} showFavorites={favoriteRows.length > 0} selected={folded ? null : activeTab} current={provider?.slug} onSelect={(slug) => { setTab(slug); setQuery(''); searchInputRef.current?.focus(); }} />
               <Combobox
                 inline
                 open
@@ -179,14 +265,21 @@ export function ProviderModelPicker({ selection, loading, disabled, onOpen, onSe
                   <ComboboxList>
                     {rows.map((row, index) => (
                       <ComboboxItem key={row.key} index={index} value={row.key} hideIndicator selectedFill={false} className="group relative w-full !min-w-0 max-w-full cursor-pointer">
-                        <ProviderIcon provider={row.provider} />
                         <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                          <div className="min-w-0 truncate text-sm font-normal leading-snug" title={row.model}>
+                          <div className="min-w-0 max-w-full shrink-0 truncate text-sm font-normal leading-snug" title={row.model}>
                             {row.name}
-                            <span className="sr-only">, {row.provider.name}</span>
+                            {showProviderName ? null : <span className="sr-only">, {row.provider.name}</span>}
                           </div>
                           {row.key === activeKey ? <CheckIcon className="size-3.5 shrink-0" aria-hidden="true" /> : null}
-                          {folded ? <span className="min-w-0 shrink truncate text-xs text-muted-foreground/70">{row.provider.name}</span> : null}
+                          {showProviderName ? <span className="min-w-0 shrink truncate text-xs text-muted-foreground/70">{row.provider.name}</span> : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <FavoriteButton
+                            isFavorite={favorites.has(row.key)}
+                            onHover={activeTab === 'favorites' && !folded}
+                            onToggle={() => toggleFavorite(row.key)}
+                          />
+                          {jumpLabel(index) ? <Kbd>{jumpLabel(index)}</Kbd> : null}
                         </div>
                       </ComboboxItem>
                     ))}
@@ -252,17 +345,74 @@ export function ProviderModelPicker({ selection, loading, disabled, onOpen, onSe
   );
 }
 
-// T3 ModelPickerSidebar: a column of provider buttons with a primary bar beside the selected one.
-function ProviderSidebar({ providers, selected, current, onSelect }) {
+// T3 ModelListRow's star: shown on hover, or always once the model is a favorite.
+function FavoriteButton({ isFavorite, onHover, onToggle }) {
+  const label = isFavorite ? 'Remove from favorites' : 'Add to favorites';
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost-muted"
+            aria-label={label}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              event.preventDefault();
+              onToggle();
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+          />
+        }
+      >
+        <StarIcon
+          className={cn(
+            'size-3.5 sm:size-3',
+            isFavorite && 'fill-current text-warning',
+            (!isFavorite || onHover) && 'opacity-0 group-hover:opacity-100 group-data-highlighted:opacity-100',
+          )}
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="top" align="center">
+        {label}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+const SIDEBAR_BUTTON =
+  'relative isolate flex aspect-square w-full cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50';
+const SelectedBar = () => <div className="pointer-events-none absolute top-1/2 right-0 z-10 h-5 w-0.75 -translate-y-1/2 rounded-full bg-primary" />;
+
+// T3 ModelPickerSidebar: Favorites, then a column of provider buttons with a primary bar beside the selected one.
+function ProviderSidebar({ providers, showFavorites, selected, current, onSelect }) {
   return (
     <div className="w-11 shrink-0 overflow-hidden bg-muted/30" data-model-picker-sidebar="true" role="toolbar" aria-orientation="vertical" aria-label="Providers">
       <div className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="relative flex min-h-full flex-col gap-1 p-1">
+          {showFavorites && (
+            <>
+              <div className="relative w-full" data-model-picker-provider="favorites">
+                {selected === 'favorites' ? <SelectedBar /> : null}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<button type="button" aria-pressed={selected === 'favorites'} aria-label="Favorites" onClick={() => onSelect('favorites')} className={SIDEBAR_BUTTON} />}
+                  >
+                    <StarIcon className="size-5 shrink-0 fill-current" aria-hidden />
+                  </TooltipTrigger>
+                  <TooltipPopup side="left" align="center">
+                    Favorites
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
+              <div className="border-b border-border/70" aria-hidden="true" />
+            </>
+          )}
           {providers.map((p) => (
             <div key={p.slug} className="relative w-full" data-model-picker-provider={p.slug}>
-              {p.slug === selected ? (
-                <div className="pointer-events-none absolute top-1/2 right-0 z-10 h-5 w-0.75 -translate-y-1/2 rounded-full bg-primary" />
-              ) : null}
+              {p.slug === selected ? <SelectedBar /> : null}
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -272,11 +422,11 @@ function ProviderSidebar({ providers, selected, current, onSelect }) {
                       aria-label={p.name}
                       disabled={p.authenticated === false}
                       onClick={() => onSelect(p.slug)}
-                      className="relative isolate flex aspect-square w-full cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                      className={SIDEBAR_BUTTON}
                     />
                   }
                 >
-                  <ProviderIcon provider={p} className="size-6 rounded-md text-xs" />
+                  <ProviderIcon provider={p} className={PROVIDER_LOGOS[p.slug] ? 'size-5 text-foreground/80' : 'size-6 rounded-md text-xs'} />
                   {p.slug === current ? <span className="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-success ring-2 ring-muted" /> : null}
                 </TooltipTrigger>
                 <TooltipPopup side="left" align="center">
