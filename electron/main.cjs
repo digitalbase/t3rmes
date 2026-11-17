@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, nativeTheme } = require('electron');
 const path = require('node:path');
 const { createHermesService } = require('./hermes.cjs');
 
@@ -12,7 +12,7 @@ function createWindow() {
     height: 780,
     minWidth: 848,
     minHeight: 560,
-    backgroundColor: '#111214',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#ffffff',
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
