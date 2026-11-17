@@ -21,7 +21,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from '../t3/components/ui/toolt
 import { observeVisibleAnimation } from '../t3/lib/visibleAnimation.ts';
 import { cn } from '../t3/lib/utils.ts';
 import { MessageAttachments } from './composer.jsx';
-import { useToolCallVisibility } from './chatSettings.js';
+import { useTimestampFormat, useToolCallVisibility } from './chatSettings.js';
+import { formatChatTimestampTooltip, formatDayAwareTimestamp } from './timestampFormat.js';
 import { ChatMarkdown } from './markdown.jsx';
 
 // Ported from T3 Code's timeline (MessagesTimeline, TimelineWorkGroupRows, WorkLog), reduced to what
@@ -49,7 +50,16 @@ function formatWorkingTimer(elapsedMs) {
   return seconds < 60 ? `${seconds}s` : formatDuration(seconds * 1000);
 }
 
-const formatClock = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+// T3 TimelineRowTimestamp text + tooltip, following General › Time format.
+function Clock({ at }) {
+  const timestampFormat = useTimestampFormat();
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span />}>{formatDayAwareTimestamp(at, timestampFormat)}</TooltipTrigger>
+      <TooltipPopup>{formatChatTimestampTooltip(at, timestampFormat)}</TooltipPopup>
+    </Tooltip>
+  );
+}
 const stripAnsi = (text) => String(text ?? '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
 // ─── Tool classification (presentation.toolGroupAction) ───
@@ -239,8 +249,8 @@ function RowIcon({ Icon, failed, highlighted }) {
 function RowTimestamp({ at }) {
   if (!at) return null;
   return (
-    <span className="pointer-events-none absolute me-1 shrink-0 whitespace-nowrap text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:static group-hover/timeline-row:opacity-100">
-      {formatClock(at)}
+    <span className="pointer-events-none absolute me-1 shrink-0 whitespace-nowrap text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:static group-hover/timeline-row:opacity-100">
+      <Clock at={at} />
     </span>
   );
 }
@@ -394,8 +404,8 @@ function TurnFoldRow({ label, expanded, onToggle, at }) {
           {expanded ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
         </button>
         {at ? (
-          <span className="ms-auto pointer-events-none shrink-0 whitespace-nowrap text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:opacity-100">
-            {formatClock(at)}
+          <span className="ms-auto pointer-events-none shrink-0 whitespace-nowrap text-muted-foreground text-xs tabular-nums opacity-0 group-hover/timeline-row:pointer-events-auto group-hover/timeline-row:opacity-100">
+            <Clock at={at} />
           </span>
         ) : null}
       </div>
@@ -441,7 +451,7 @@ function AssistantMeta({ message, alwaysVisible }) {
       )}
     >
       <CopyButton text={message.text.trim()} />
-      {message.at ? <p className="text-muted-foreground text-xs tabular-nums">{formatClock(message.at)}</p> : null}
+      {message.at ? <p className="text-muted-foreground text-xs tabular-nums"><Clock at={message.at} /></p> : null}
     </div>
   );
 }

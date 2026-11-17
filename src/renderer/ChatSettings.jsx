@@ -5,15 +5,52 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../
 import { isMacPlatform } from '../t3/lib/utils.ts';
 import {
   DEFAULT_SEND_SHORTCUT,
+  DEFAULT_TIMESTAMP_FORMAT,
   DEFAULT_TOOL_CALL_VISIBILITY,
+  TIMESTAMP_FORMATS,
+  TIMESTAMP_FORMAT_LABELS,
   TOOL_CALL_VISIBILITIES,
   TOOL_CALL_VISIBILITY_LABELS,
   setSendShortcut,
+  setTimestampFormat,
   setToolCallVisibility,
   useSendShortcut,
+  useTimestampFormat,
   useToolCallVisibility,
 } from './chatSettings.js';
 import { SettingResetButton, SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
+
+// T3 GeneralSettingsPanel "Display" section.
+export function DisplaySettingsSection() {
+  const timestampFormat = useTimestampFormat();
+  return (
+    <SettingsSection title="Display">
+      <SettingsRow
+        title="Time format"
+        description="System default follows your browser or OS clock preference."
+        resetAction={
+          timestampFormat !== DEFAULT_TIMESTAMP_FORMAT ? (
+            <SettingResetButton label="time format" onClick={() => setTimestampFormat(DEFAULT_TIMESTAMP_FORMAT)} />
+          ) : null
+        }
+        control={
+          <Select value={timestampFormat} onValueChange={(value) => TIMESTAMP_FORMATS.includes(value) && setTimestampFormat(value)}>
+            <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Timestamp format">
+              <SelectValue>{TIMESTAMP_FORMAT_LABELS[timestampFormat]}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              {TIMESTAMP_FORMATS.map((value) => (
+                <SelectItem key={value} hideIndicator value={value}>
+                  {TIMESTAMP_FORMAT_LABELS[value]}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        }
+      />
+    </SettingsSection>
+  );
+}
 
 export function ChatSettings() {
   const modifierLabel = isMacPlatform(navigator.platform) ? '⌘' : 'Ctrl';

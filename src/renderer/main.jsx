@@ -78,7 +78,7 @@ import {
   useComposerSelection,
 } from './composer.jsx';
 import { AppearanceSettings } from './AppearanceSettings.jsx';
-import { ChatSettings } from './ChatSettings.jsx';
+import { ChatSettings, DisplaySettingsSection } from './ChatSettings.jsx';
 import { composerRequiresModifier, useSendShortcut } from './chatSettings.js';
 import { Timeline } from './timeline.jsx';
 import { TimelineMinimap } from './minimap.jsx';
@@ -1336,6 +1336,7 @@ function Composer({ draft, setDraft, attachments, onAddFiles, onRemoveAttachment
 
 const SETTINGS_SEARCH_ITEMS = [
   { id: 'working-directory', title: 'Working directory', section: 'general' },
+  { id: 'time-format', title: 'Time format', section: 'general' },
   { id: 'color-scheme', title: 'Color scheme', section: 'appearance' },
   { id: 'theme', title: 'Themes', section: 'appearance' },
   { id: 'contrast', title: 'Contrast', section: 'appearance' },
@@ -1556,6 +1557,7 @@ function SettingsModal({ open, section, onSectionChange, onClose, hermes }) {
                           control={<code className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">~/Work</code>}
                         />
                       </SettingsSection>
+                      <DisplaySettingsSection />
                     </SettingsPageContainer>
                   )}
                   {section === 'appearance' && <AppearanceSettings />}
