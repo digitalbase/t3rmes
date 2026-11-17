@@ -3,6 +3,8 @@ const path = require('node:path');
 const { createHermesService } = require('./hermes.cjs');
 
 const isDev = !app.isPackaged;
+// Lets agents drive and screenshot the dev window over CDP (127.0.0.1 only).
+if (isDev) app.commandLine.appendSwitch('remote-debugging-port', '9333');
 let mainWindow = null;
 const hermes = createHermesService({ getWindow: () => mainWindow });
 
