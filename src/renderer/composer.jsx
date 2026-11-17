@@ -1,0 +1,386 @@
+import React, { useMemo, useRef, useState } from 'react';
+import { CheckIcon, FileIcon, PaperclipIcon, XIcon, ZapIcon } from 'lucide-react';
+import { Popover, PopoverPopup, PopoverTrigger } from '../t3/components/ui/popover.tsx';
+import { Combobox, ComboboxEmpty, ComboboxItem, ComboboxList, ComboboxSearchInput } from '../t3/components/ui/combobox.tsx';
+import { Button } from '../t3/components/ui/button.tsx';
+import { Tooltip, TooltipPopup, TooltipTrigger } from '../t3/components/ui/tooltip.tsx';
+import { cn } from '../t3/lib/utils.ts';
+
+// Hermes' levels (hermes_constants.VALID_REASONING_EFFORTS); `none` is thinking off.
+const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const DEFAULT_EFFORT = 'medium';
+const EFFORT_LABELS = { none: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max', ultra: 'Ultra' };
+
+// Extensions Hermes stages as images (tui_gateway image.attach_bytes); the rest go through file.attach.
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'svg', 'ico']);
+const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
+
+let nextAttachmentId = 1;
+export function toAttachment(file) {
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const kind = IMAGE_EXTENSIONS.has(ext) && file.size <= IMAGE_MAX_BYTES ? 'image' : 'file';
+  return {
+    id: `att-${nextAttachmentId++}`,
+    name: file.name || (kind === 'image' ? 'pasted-image.png' : 'file'),
+    kind,
+    file,
+    size: file.size,
+    previewUrl: kind === 'image' ? URL.createObjectURL(file) : null,
+  };
+}
+
+export function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Hermes Desktop lib/model-status-label.ts: vendor prefix off, date pin off, friendly casing.
+const VARIANT_TAGS = [/-fast$/i, /-thinking$/i, /-preview$/i, /-latest$/i];
+const titleCase = (text) => text.replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+export function modelDisplayName(model) {
+  if (!model) return 'Default model';
+  let base = model.trim().slice(model.trim().lastIndexOf('/') + 1);
+  const variant = VARIANT_TAGS.find((pattern) => pattern.test(base));
+  const tag = variant ? titleCase(base.match(variant)[0].slice(1)) : '';
+  if (variant) base = base.replace(variant, '');
+  base = base.replace(/-\d{8}$/, '');
+  let name;
+  if (/^claude-/i.test(base)) name = titleCase(base.replace(/^claude-/i, '').replace(/-/g, ' ')).replace(/(\d+) (\d+)$/, '$1.$2');
+  else if (/^gpt-/i.test(base)) name = base.replace(/^gpt-/i, 'GPT-');
+  else if (/^gemini-/i.test(base)) name = base.replace(/^gemini-/i, 'Gemini ').replace(/-/g, ' ');
+  else name = titleCase(base.replace(/-/g, ' '));
+  return [name || model, tag].filter(Boolean).join(' ');
+}
+
+// T3 ComposerControl.tsx, size "sm".
+const COMPOSER_CONTROL =
+  "relative inline-flex shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-(--control-radius) border border-transparent text-base outline-none hover:bg-accent data-pressed:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 data-disabled:pointer-events-none data-disabled:opacity-64 [&:active:not([aria-haspopup])]:scale-[0.97] [&_svg]:pointer-events-none [&_svg]:shrink-0 h-7 gap-1.5 px-2 font-medium text-foreground/80 [&_svg:not([class*='text-'])]:text-muted-foreground hover:text-foreground sm:text-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 aria-pressed:bg-accent aria-pressed:text-accent-foreground data-popup-open:bg-accent";
+
+function ComposerControl({ className, ...props }) {
+  return <button type="button" className={cn(COMPOSER_CONTROL, className)} {...props} />;
+}
+
+const PROVIDER_TINTS = ['bg-violet-500/15 text-violet-600 dark:text-violet-300', 'bg-sky-500/15 text-sky-600 dark:text-sky-300', 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300', 'bg-amber-500/15 text-amber-700 dark:text-amber-300', 'bg-rose-500/15 text-rose-600 dark:text-rose-300'];
+function ProviderIcon({ provider, className }) {
+  const name = provider?.name || provider?.slug || '?';
+  const tint = PROVIDER_TINTS[[...(provider?.slug || name)].reduce((sum, c) => sum + c.charCodeAt(0), 0) % PROVIDER_TINTS.length];
+  return (
+    <span aria-hidden="true" className={cn('flex size-4 shrink-0 items-center justify-center rounded-[5px] font-semibold text-[10px] leading-none', tint, className)}>
+      {name.trim()[0]?.toUpperCase()}
+    </span>
+  );
+}
+
+// The provider this pick runs on. model.options reports `custom` for a `custom:<host>` slug, so is_current breaks the tie.
+function findProvider(providers, slug) {
+  return providers.find((p) => p.slug === slug) || providers.find((p) => slug && p.slug.split(':')[0] === slug && p.is_current) || null;
+}
+
+export function useComposerSelection(thread, modelOptions, defaults) {
+  const providers = modelOptions.providers;
+  const pick = { ...thread.runtime, ...thread.pending };
+  const model = pick.model || thread.model || defaults.model || '';
+  const providerSlug = pick.provider || (model === defaults.model ? defaults.provider : null) || defaults.provider;
+  const provider = findProvider(providers, providerSlug) || providers.find((p) => p.is_current) || null;
+  const caps = provider?.capabilities?.[model] ?? null;
+  const effort = pick.effort || defaults.effort || DEFAULT_EFFORT;
+  const fast = typeof pick.fast === 'boolean' ? pick.fast : Boolean(defaults.fast);
+  return { providers, provider, model, caps, effort, fast };
+}
+
+const modelKey = (slug, model) => `${slug}\u0000${model}`;
+
+// T3 ProviderModelPicker + ModelPickerContent + ComposerEffortColumn + ComposerPickerFooter, simplified for Hermes.
+export function ProviderModelPicker({ selection, loading, disabled, onOpen, onSelectModel, onEffort, onFast }) {
+  const { providers, provider, model, caps, effort, fast } = selection;
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState(null);
+  const [query, setQuery] = useState('');
+  const searchInputRef = useRef(null);
+  const activeTab = providers.find((p) => p.slug === tab) || provider || providers[0] || null;
+  const folded = query.trim().toLowerCase();
+
+  const rows = useMemo(() => {
+    const entries = [];
+    const add = (p, slug) => entries.push({ key: modelKey(p.slug, slug), provider: p, model: slug, name: modelDisplayName(slug) });
+    if (folded) {
+      for (const p of providers) for (const slug of p.models || []) if (`${slug} ${modelDisplayName(slug)} ${p.name}`.toLowerCase().includes(folded)) add(p, slug);
+    } else if (activeTab) {
+      const featured = activeTab.featured_models || [];
+      for (const slug of featured) add(activeTab, slug);
+      for (const slug of activeTab.models || []) if (!featured.includes(slug)) add(activeTab, slug);
+    }
+    return entries;
+  }, [providers, activeTab, folded]);
+  const keys = rows.map((row) => row.key);
+  const activeKey = provider && model ? modelKey(provider.slug, model) : null;
+
+  const levels = caps?.reasoning === false ? [] : [...(caps?.can_disable_reasoning ? ['none'] : []), ...REASONING_EFFORTS];
+  const name = modelDisplayName(model);
+  const label = caps?.reasoning === false ? name : `${name} ${EFFORT_LABELS[effort] ?? effort}`;
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (disabled) return setOpen(false);
+        setOpen(next);
+        if (next) {
+          setTab(null);
+          setQuery('');
+          onOpen?.();
+        }
+      }}
+    >
+      <PopoverTrigger
+        render={<ComposerControl aria-label={`Model: ${label}`} disabled={disabled} className="min-w-0 shrink justify-between" data-chat-provider-model-picker="true" />}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {provider && <ProviderIcon provider={provider} />}
+          <span className="min-w-0 max-w-56 flex-1 truncate" data-chat-provider-model-picker-label="true">
+            {label}
+          </span>
+        </span>
+      </PopoverTrigger>
+      <PopoverPopup initialFocus={searchInputRef} align="start" side="top" className="before:hidden" padding="none">
+        <div className="flex max-h-(--available-height) flex-col">
+          <div className="flex h-86.5 min-h-0">
+            <div className="relative flex w-screen max-w-90 flex-row overflow-hidden" data-model-picker-content="true">
+              <ProviderSidebar providers={providers} selected={folded ? null : activeTab?.slug} current={provider?.slug} onSelect={(slug) => { setTab(slug); setQuery(''); searchInputRef.current?.focus(); }} />
+              <Combobox
+                inline
+                open
+                autoHighlight
+                filter={null}
+                items={keys}
+                filteredItems={keys}
+                value={activeKey}
+                onValueChange={(key) => {
+                  const row = rows.find((r) => r.key === key);
+                  if (row) onSelectModel(row.provider.slug, row.model);
+                }}
+              >
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-l border-border/70 bg-muted/40">
+                  <ComboboxSearchInput
+                    ref={searchInputRef}
+                    placeholder="Search models..."
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setOpen(false);
+                      }
+                    }}
+                  />
+                  <ComboboxEmpty className="empty:h-0">{loading && !providers.length ? 'Loading models…' : 'No models found'}</ComboboxEmpty>
+                  <ComboboxList>
+                    {rows.map((row, index) => (
+                      <ComboboxItem key={row.key} index={index} value={row.key} hideIndicator selectedFill={false} className="group relative w-full !min-w-0 max-w-full cursor-pointer">
+                        <ProviderIcon provider={row.provider} />
+                        <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                          <div className="min-w-0 truncate text-sm font-normal leading-snug" title={row.model}>
+                            {row.name}
+                            <span className="sr-only">, {row.provider.name}</span>
+                          </div>
+                          {row.key === activeKey ? <CheckIcon className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+                          {folded ? <span className="min-w-0 shrink truncate text-xs text-muted-foreground/70">{row.provider.name}</span> : null}
+                        </div>
+                      </ComboboxItem>
+                    ))}
+                  </ComboboxList>
+                </div>
+              </Combobox>
+            </div>
+            <div data-model-picker-effort className="flex min-h-0 w-48 shrink-0 flex-col border-l border-border/70 bg-muted/40">
+              <div className="shrink-0 px-3 pt-2.5">
+                <div className="flex h-8.25 -translate-y-px items-center gap-2 border-b border-border/70 pb-1.5 text-sm">
+                  <span className="text-muted-foreground">Effort</span>
+                  <span className="ms-auto min-w-0 truncate text-muted-foreground text-xs">{name}</span>
+                </div>
+              </div>
+              <div role="radiogroup" aria-label="Effort" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain px-2 pt-2.5 pb-1.5">
+                {levels.length === 0 ? (
+                  <div className="flex h-8 items-center px-2 text-muted-foreground text-sm">No effort levels</div>
+                ) : (
+                  levels.map((level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      role="radio"
+                      aria-checked={level === effort}
+                      onClick={() => level !== effort && onEffort(level)}
+                      className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 rounded-sm px-2 text-left text-sm text-foreground outline-none hover:bg-foreground/[0.09] focus-visible:bg-foreground/[0.09]"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{EFFORT_LABELS[level]}</span>
+                      {level === effort ? (
+                        <CheckIcon aria-hidden="true" className="size-3.5" />
+                      ) : level === DEFAULT_EFFORT ? (
+                        <span className="text-muted-foreground/70 text-xs">Default</span>
+                      ) : null}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+          {caps?.fast ? (
+            <div className="flex flex-wrap items-center gap-2 border-t border-border/70 bg-muted/40 px-3 py-2">
+              <div role="radiogroup" aria-label="Speed" className="flex rounded-lg bg-input/40 p-0.5">
+                {[false, true].map((value) => (
+                  <button
+                    key={String(value)}
+                    type="button"
+                    role="radio"
+                    aria-checked={fast === value}
+                    data-checked={fast === value || undefined}
+                    onClick={() => fast !== value && onFast(value)}
+                    className="flex h-6 cursor-pointer items-center justify-center gap-1 px-2 text-muted-foreground text-xs outline-none first:rounded-l-md last:rounded-r-md hover:text-foreground data-checked:bg-input/72 data-checked:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                  >
+                    {value ? <ZapIcon aria-hidden="true" className="size-3 fill-current" /> : null}
+                    {value ? 'Fast' : 'Standard'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
+// T3 ModelPickerSidebar: a column of provider buttons with a primary bar beside the selected one.
+function ProviderSidebar({ providers, selected, current, onSelect }) {
+  return (
+    <div className="w-11 shrink-0 overflow-hidden bg-muted/30" data-model-picker-sidebar="true" role="toolbar" aria-orientation="vertical" aria-label="Providers">
+      <div className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="relative flex min-h-full flex-col gap-1 p-1">
+          {providers.map((p) => (
+            <div key={p.slug} className="relative w-full" data-model-picker-provider={p.slug}>
+              {p.slug === selected ? (
+                <div className="pointer-events-none absolute top-1/2 right-0 z-10 h-5 w-0.75 -translate-y-1/2 rounded-full bg-primary" />
+              ) : null}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-pressed={p.slug === selected}
+                      aria-label={p.name}
+                      disabled={p.authenticated === false}
+                      onClick={() => onSelect(p.slug)}
+                      className="relative isolate flex aspect-square w-full cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                  }
+                >
+                  <ProviderIcon provider={p} className="size-6 rounded-md text-xs" />
+                  {p.slug === current ? <span className="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-success ring-2 ring-muted" /> : null}
+                </TooltipTrigger>
+                <TooltipPopup side="left" align="center">
+                  {p.name}
+                  {p.authenticated === false ? ' · not signed in' : ''}
+                </TooltipPopup>
+              </Tooltip>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// T3 ComposerAttachButton.
+export function ComposerAttachButton({ onFiles, disabled }) {
+  const inputRef = useRef(null);
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = '';
+          if (files.length) onFiles(files);
+        }}
+      />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={disabled}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => inputRef.current?.click()}
+              aria-label="Attach files"
+            />
+          }
+        >
+          <PaperclipIcon className="translate-y-px" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">Attach files</TooltipPopup>
+      </Tooltip>
+    </>
+  );
+}
+
+// T3 ComposerAttachmentStrip: image tiles, then file rows.
+export function ComposerAttachmentStrip({ attachments, onRemove }) {
+  const images = attachments.filter((a) => a.kind === 'image');
+  const files = attachments.filter((a) => a.kind !== 'image');
+  return (
+    <div className="px-3 pt-3 sm:px-4">
+      {images.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {images.map((attachment) => (
+            <div key={attachment.id} className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-background">
+              <img src={attachment.previewUrl} alt={attachment.name} className="h-full w-full object-cover" />
+              <Button type="button" variant="media-close" size="icon-xs" className="absolute right-1 top-1" onClick={() => onRemove(attachment.id)} aria-label={`Remove ${attachment.name}`}>
+                <XIcon />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className="mb-1 flex flex-col gap-1">
+          {files.map((attachment) => (
+            <div key={attachment.id} className="flex min-w-0 items-center gap-2 py-1 text-sm text-foreground">
+              <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
+              <span className="shrink-0 text-xs text-secondary-label">{formatSize(attachment.size)}</span>
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => onRemove(attachment.id)} aria-label={`Remove ${attachment.name}`}>
+                <XIcon />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Sent attachments on a user message: thumbnails and file chips.
+export function MessageAttachments({ attachments }) {
+  if (!attachments?.length) return null;
+  return (
+    <div className="flex max-w-[80%] flex-wrap justify-end gap-2">
+      {attachments.map((attachment) =>
+        attachment.kind === 'image' && attachment.previewUrl ? (
+          <img key={attachment.id} src={attachment.previewUrl} alt={attachment.name} className="h-24 max-w-48 rounded-lg border border-border/80 object-cover" />
+        ) : (
+          <span key={attachment.id} className="inline-flex h-7 max-w-64 items-center gap-1.5 rounded-lg border border-border/80 bg-card px-2 text-xs text-foreground">
+            <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{attachment.name}</span>
+          </span>
+        ),
+      )}
+    </div>
+  );
+}

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  BotIcon,
   CheckIcon,
   ChevronsUpDownIcon,
   CircleAlertIcon,
@@ -72,6 +71,14 @@ import {
 import { CollapsibleSectionHeader } from '../t3/components/ui/collapsible-section-header.tsx';
 import { cn } from '../t3/lib/utils.ts';
 import { threadStatus, threadTitle, useHermes } from './hermes.js';
+import {
+  ComposerAttachButton,
+  ComposerAttachmentStrip,
+  MessageAttachments,
+  ProviderModelPicker,
+  toAttachment,
+  useComposerSelection,
+} from './composer.jsx';
 import { AppearanceSettings } from './AppearanceSettings.jsx';
 import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
 import '@fontsource-variable/inter';
@@ -201,6 +208,7 @@ function App() {
           onSignIn={() => hermes.signIn(connections.active).catch(() => {})}
           onSend={hermes.send}
           onStop={hermes.stop}
+          picker={hermes}
         />
       </SidebarInset>
       <SettingsModal open={settingsOpen} section={section} onSectionChange={setSection} onClose={() => setSettingsOpen(false)} hermes={hermes} />
@@ -1078,8 +1086,9 @@ function PageHeader({ children }) {
   );
 }
 
-function ChatView({ thread, connection, connectionState, connectionError, onSignIn, onSend, onStop }) {
+function ChatView({ thread, connection, connectionState, connectionError, onSignIn, onSend, onStop, picker }) {
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState([]);
   const scrollRef = useRef(null);
   const isEmpty = thread.messages.length === 0 && !thread.loading;
   const running = thread.running;
@@ -1092,13 +1101,50 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
   function submit(event) {
     event?.preventDefault();
     const prompt = draft.trim();
-    if (!prompt || running || !connected) return;
+    if ((!prompt && !attachments.length) || running || !connected) return;
     setDraft('');
-    onSend(prompt);
+    setAttachments([]);
+    onSend(prompt, attachments);
+  }
+
+  const selection = useComposerSelection(thread, picker.modelOptions, picker.defaults);
+  async function selectModel(provider, model) {
+    const result = await picker.selectModel(provider, model);
+    if (result?.confirm_required && window.confirm(result.confirm_message || `Switch to ${model}?`)) {
+      await picker.selectModel(provider, model, { confirmed: true });
+    }
   }
 
   const composer = (
-    <Composer draft={draft} setDraft={setDraft} running={running} disabled={!connected} onSubmit={submit} onStop={onStop} />
+    <Composer
+      draft={draft}
+      setDraft={setDraft}
+      attachments={attachments}
+      onAddFiles={(files) => setAttachments((current) => [...current, ...files.map(toAttachment)])}
+      onRemoveAttachment={(id) =>
+        setAttachments((current) => {
+          const removed = current.find((a) => a.id === id);
+          if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+          return current.filter((a) => a.id !== id);
+        })
+      }
+      running={running}
+      disabled={!connected}
+      onSubmit={submit}
+      onStop={onStop}
+      modelPicker={
+        <ProviderModelPicker
+          selection={selection}
+          loading={picker.modelOptions.loading}
+          disabled={!connected}
+          onOpen={picker.refreshModels}
+          onSelectModel={selectModel}
+          onEffort={picker.setEffort}
+          onFast={picker.setFast}
+        />
+      }
+      context={thread.cwd || thread.branch ? <ComposerContext cwd={thread.cwd} branch={thread.branch} /> : null}
+    />
   );
   const banner =
     connectionState === 'signed-out' ? (
@@ -1164,9 +1210,12 @@ function MessageRow({ message }) {
   if (message.role === 'user') {
     return (
       <div className="group flex flex-col items-end gap-1">
-        <div className="relative max-w-[80%] whitespace-pre-wrap rounded-2xl bg-message p-3 text-sm leading-relaxed text-message-foreground">
-          {message.text}
-        </div>
+        <MessageAttachments attachments={message.attachments} />
+        {message.text && (
+          <div className="relative max-w-[80%] whitespace-pre-wrap rounded-2xl bg-message p-3 text-sm leading-relaxed text-message-foreground">
+            {message.text}
+          </div>
+        )}
       </div>
     );
   }
@@ -1195,10 +1244,49 @@ function MessageRow({ message }) {
   );
 }
 
-function Composer({ draft, setDraft, running, disabled, onSubmit, onStop }) {
+// Read-only: Hermes reports where the session runs but has no checkout or branch switching.
+function ComposerContext({ cwd, branch }) {
+  const folder = cwd?.replace(/\/+$/, '').split('/').pop();
   return (
+    <div className="mx-auto flex w-full max-w-(--chat-content-max-width) items-center gap-3 px-2 text-xs text-muted-foreground">
+      {folder && (
+        <span className="inline-flex min-w-0 items-center gap-1.5" title={cwd}>
+          <FolderIcon className="size-3.5 shrink-0" />
+          <span className="truncate">{folder}</span>
+        </span>
+      )}
+      {branch && (
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <GitBranchIcon className="size-3.5 shrink-0" />
+          <span className="truncate">{branch}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Composer({ draft, setDraft, attachments, onAddFiles, onRemoveAttachment, running, disabled, onSubmit, onStop, modelPicker, context }) {
+  const [dragging, setDragging] = useState(false);
+  const hasFiles = (event) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
+  return (
+    <div className="flex flex-col gap-2">
     <form
       onSubmit={onSubmit}
+      onDragOver={(event) => {
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false);
+      }}
+      onDrop={(event) => {
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        setDragging(false);
+        const files = Array.from(event.dataTransfer.files);
+        if (files.length) onAddFiles(files);
+      }}
       className={cn(
         'relative isolate mx-auto w-full max-w-(--chat-content-max-width)',
         '[--chat-composer-glass-surface:var(--card)] [--chat-composer-outline:rgb(0_0_0/8%)]',
@@ -1210,9 +1298,21 @@ function Composer({ draft, setDraft, running, disabled, onSubmit, onStop }) {
       )}
     >
       <div className="relative z-10 w-full rounded-2xl shadow-composer after:pointer-events-none after:absolute after:inset-0 after:z-1 after:rounded-[inherit] after:border after:border-(--chat-composer-outline) dark:shadow-none dark:after:inset-shadow-2xs dark:after:inset-shadow-(color:--chat-composer-highlight)">
+        {dragging && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/[0.035] text-sm font-medium text-foreground">
+            Drop files to attach
+          </div>
+        )}
+        {attachments.length > 0 && <ComposerAttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          onPaste={(event) => {
+            const files = Array.from(event.clipboardData?.files ?? []);
+            if (!files.length) return;
+            event.preventDefault();
+            onAddFiles(files);
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) onSubmit(event);
           }}
@@ -1220,11 +1320,12 @@ function Composer({ draft, setDraft, running, disabled, onSubmit, onStop }) {
           rows={2}
           className="block max-h-60 min-h-16 w-full resize-none bg-transparent px-4 pt-4 text-[15px] leading-relaxed text-foreground outline-none placeholder:text-placeholder sm:text-sm"
         />
-        <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:px-4">
-          <Button type="button" variant="ghost" size="sm" className="text-muted-foreground">
-            <BotIcon />
-            Default model
-          </Button>
+        <div data-chat-composer-footer="true" className="flex min-w-0 flex-nowrap items-center overflow-visible px-2 pb-2">
+          <div className="me-2">
+            <ComposerAttachButton onFiles={onAddFiles} disabled={disabled} />
+          </div>
+          <div className="flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2">
+          <div className="relative flex min-w-0 flex-1 items-center justify-end gap-0.5">{modelPicker}</div>
           {running ? (
             <button
               type="button"
@@ -1237,7 +1338,7 @@ function Composer({ draft, setDraft, running, disabled, onSubmit, onStop }) {
           ) : (
             <button
               type="submit"
-              disabled={disabled || !draft.trim()}
+              disabled={disabled || (!draft.trim() && !attachments.length)}
               aria-label="Send message"
               className="relative flex size-8 items-center justify-center rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 hover:bg-message-action-hover disabled:pointer-events-none disabled:opacity-30"
             >
@@ -1246,9 +1347,12 @@ function Composer({ draft, setDraft, running, disabled, onSubmit, onStop }) {
               </svg>
             </button>
           )}
+          </div>
         </div>
       </div>
     </form>
+    {context}
+    </div>
   );
 }
 

@@ -16,7 +16,7 @@ const RT_COOKIES = ['__Host-hermes_session_rt', '__Secure-hermes_session_rt', 'h
 const CONNECT_TIMEOUT_MS = 15_000;
 const PING_INTERVAL_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 30_000;
-const LONG_METHODS = { 'prompt.submit': 1_800_000, 'session.resume': 120_000, 'session.create': 120_000 };
+const LONG_METHODS = { 'prompt.submit': 1_800_000, 'session.resume': 120_000, 'session.create': 120_000, 'file.attach': 120_000, 'image.attach_bytes': 120_000 };
 
 // ---------- registry ----------
 

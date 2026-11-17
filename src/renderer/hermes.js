@@ -22,6 +22,10 @@ const newThread = (fields = {}) => ({
   unread: false,
   isActive: false,
   lastActive: Date.now() / 1000,
+  // What the session runs on, from Hermes session info: { model, provider, effort, fast }.
+  runtime: {},
+  // Picks made before the session exists; session.create receives them.
+  pending: {},
   ...fields,
 });
 
@@ -46,6 +50,46 @@ function fromSessionRow(row) {
     archived: Boolean(row.archived),
     unread: Boolean(row.unread),
   };
+}
+
+// Hermes session info -> the live runtime pick (model, provider, effort, fast) plus cwd/branch.
+function infoFields(thread, info = {}) {
+  const runtime = { ...thread.runtime };
+  if (info.model) runtime.model = info.model;
+  if (info.provider) runtime.provider = info.provider;
+  // "" is the profile default; picks fall back to the runtime-wide default then.
+  if (typeof info.reasoning_effort === 'string') runtime.effort = info.reasoning_effort || null;
+  if (typeof info.fast === 'boolean') runtime.fast = info.fast;
+  return {
+    runtime,
+    cwd: info.cwd || thread.cwd,
+    branch: info.branch || thread.branch,
+  };
+}
+
+const readDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+
+// Stage one composer attachment on a live session. Bytes, not paths, so remote runtimes work.
+async function uploadAttachment(sessionId, attachment) {
+  const dataUrl = await readDataUrl(attachment.file);
+  if (attachment.kind === 'image') {
+    const result = await bridge.request('image.attach_bytes', {
+      session_id: sessionId,
+      content_base64: dataUrl.slice(dataUrl.indexOf(',') + 1),
+      filename: attachment.name,
+    });
+    if (!result?.attached) throw new Error(result?.message || `Could not attach ${attachment.name}`);
+    return null;
+  }
+  const result = await bridge.request('file.attach', { session_id: sessionId, name: attachment.name, data_url: dataUrl });
+  if (!result?.attached || !result.ref_text) throw new Error(result?.message || `Could not attach ${attachment.name}`);
+  return result.ref_text;
 }
 
 function closeAssistant(messages) {
@@ -102,6 +146,8 @@ function applyEvent(thread, type, payload = {}) {
         messages: closeAssistant(messages).map((m) => (m.role === 'tool' ? { ...m, running: false } : m)),
       };
     }
+    case 'session.info':
+      return { ...thread, ...infoFields(thread, payload) };
     case 'error':
       return {
         ...thread,
@@ -142,6 +188,8 @@ export function useHermes() {
   const [syncSupported, setSyncSupported] = useState(false);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
+  const activeKeyRef = useRef(activeKey);
+  activeKeyRef.current = activeKey;
 
   const updateThread = useCallback((key, update) => {
     setThreads((current) => current.map((t) => (t.key === key ? update(t) : t)));
@@ -269,6 +317,7 @@ export function useHermes() {
           ...t,
           loading: false,
           sessionId: result.session_id,
+          ...infoFields(t, result.info),
           running: Boolean(result.running),
           runningSince: result.running ? t.runningSince ?? Date.now() : t.runningSince,
           messages: historyToMessages(result.messages),
@@ -286,11 +335,87 @@ export function useHermes() {
     setActiveKey(fresh.key);
   }, []);
 
+  // The runtime-wide model catalog and defaults; a session's own pick overrides them.
+  const [modelOptions, setModelOptions] = useState({ providers: [], loading: false });
+  const [defaults, setDefaults] = useState({});
+  const refreshModels = useCallback(async () => {
+    const thread = threadsRef.current.find((t) => t.key === activeKeyRef.current);
+    setModelOptions((current) => ({ ...current, loading: true }));
+    try {
+      const result = await bridge.request('model.options', thread?.sessionId ? { session_id: thread.sessionId } : {});
+      setModelOptions({ providers: result?.providers || [], loading: false });
+      setDefaults((current) => ({ ...current, model: result?.model || current.model, provider: result?.provider || current.provider }));
+    } catch {
+      setModelOptions((current) => ({ ...current, loading: false }));
+    }
+  }, []);
+  useEffect(() => {
+    if (!isReady) return;
+    setModelOptions({ providers: [], loading: false });
+    setDefaults({});
+    refreshModels();
+    Promise.allSettled([bridge.request('config.get', { key: 'reasoning' }), bridge.request('config.get', { key: 'fast' })]).then(
+      ([reasoning, fast]) =>
+        setDefaults((current) => ({
+          ...current,
+          effort: reasoning.value?.value || null,
+          fast: fast.value?.value === 'fast',
+        })),
+    );
+  }, [isReady, connections.active, refreshModels]);
+
+  const pushError = useCallback(
+    (key, message) => updateThread(key, (t) => ({ ...t, messages: [...t.messages, { role: 'error', text: message }] })),
+    [updateThread],
+  );
+
+  // A live session switches through config.set; a draft keeps the pick for session.create.
+  const configure = useCallback(
+    async (field, value, request) => {
+      const thread = threadsRef.current.find((t) => t.key === activeKeyRef.current);
+      if (!thread) return null;
+      const key = thread.key;
+      if (!thread.sessionId) {
+        updateThread(key, (t) => ({ ...t, pending: { ...t.pending, ...value } }));
+        return null;
+      }
+      const previous = thread.runtime;
+      updateThread(key, (t) => ({ ...t, runtime: { ...t.runtime, ...value } }));
+      try {
+        const result = await bridge.request('config.set', { session_id: thread.sessionId, ...request });
+        if (result?.confirm_required) {
+          updateThread(key, (t) => ({ ...t, runtime: previous }));
+          return result;
+        }
+        return null;
+      } catch (error) {
+        updateThread(key, (t) => ({ ...t, runtime: previous }));
+        pushError(key, error.message);
+        return null;
+      }
+    },
+    [updateThread, pushError],
+  );
+
+  // Resolves to { confirm_message } when Hermes wants the switch confirmed (expensive model).
+  const selectModel = useCallback(
+    (provider, model, { confirmed = false } = {}) =>
+      configure('model', { provider, model }, {
+        key: 'model',
+        value: `${model} --provider ${provider}`,
+        ...(confirmed ? { confirm_expensive_model: true } : {}),
+      }),
+    [configure],
+  );
+  const setEffort = useCallback((effort) => configure('effort', { effort }, { key: 'reasoning', value: effort }), [configure]);
+  const setFast = useCallback((fast) => configure('fast', { fast }, { key: 'fast', value: fast ? 'fast' : 'normal' }), [configure]);
+
   const send = useCallback(
-    async (text) => {
+    async (text, attachments = []) => {
       const thread = threadsRef.current.find((t) => t.key === activeKey);
       if (!thread || thread.running) return;
       const key = thread.key;
+      const shown = attachments.map(({ id, name, kind, previewUrl }) => ({ id, name, kind, previewUrl }));
       updateThread(key, (t) => ({
         ...t,
         running: true,
@@ -298,25 +423,42 @@ export function useHermes() {
         runningSince: Date.now(),
         lastActive: Date.now() / 1000,
         archived: false,
-        preview: t.preview || text.replace(/\s+/g, ' ').slice(0, 160),
-        messages: [...t.messages, { role: 'user', text }, { role: 'assistant', text: '', streaming: true }],
+        preview: t.preview || (text || attachments[0]?.name || '').replace(/\s+/g, ' ').slice(0, 160),
+        messages: [...t.messages, { role: 'user', text, attachments: shown }, { role: 'assistant', text: '', streaming: true }],
       }));
       if (thread.archived) patchThread(key, { archived: false });
       try {
         let sessionId = thread.sessionId;
         if (!sessionId) {
-          const created = await bridge.request('session.create', {});
+          const { model, provider, effort, fast } = thread.pending;
+          const created = await bridge.request('session.create', {
+            ...(model ? { model, provider } : {}),
+            ...(effort ? { reasoning_effort: effort } : {}),
+            ...(typeof fast === 'boolean' ? { fast } : {}),
+          });
           sessionId = created.session_id;
-          updateThread(key, (t) => ({
-            ...t,
-            sessionId,
-            storedId: created.stored_session_id || t.storedId,
-            model: t.model || created.info?.model || null,
-            cwd: t.cwd || created.info?.cwd || null,
-            branch: t.branch || created.info?.branch || null,
-          }));
+          updateThread(key, (t) => {
+            const info = infoFields(t, created.info);
+            return {
+              ...t,
+              ...info,
+              runtime: { ...info.runtime, ...t.pending },
+              pending: {},
+              sessionId,
+              storedId: created.stored_session_id || t.storedId,
+              model: t.model || created.info?.model || null,
+            };
+          });
         }
-        const result = await bridge.request('prompt.submit', { session_id: sessionId, text });
+        const refs = [];
+        for (const attachment of attachments) {
+          const ref = await uploadAttachment(sessionId, attachment);
+          if (ref) refs.push(ref);
+        }
+        const prompt =
+          [refs.join('\n'), text].filter(Boolean).join('\n\n') ||
+          (attachments.some((a) => a.kind === 'image') ? 'What do you see in this image?' : '');
+        const result = await bridge.request('prompt.submit', { session_id: sessionId, text: prompt });
         if (result && result.status && result.status !== 'streaming' && result.status !== 'queued') {
           updateThread(key, (t) => ({ ...t, running: false, runningSince: null, messages: closeAssistant(t.messages) }));
         }
@@ -347,6 +489,12 @@ export function useHermes() {
     createThread,
     send,
     stop,
+    modelOptions,
+    defaults,
+    refreshModels,
+    selectModel,
+    setEffort,
+    setFast,
     pinThread: (key, pinned) => patchThread(key, { pinned }),
     settleThread: (key, settled) => patchThread(key, { archived: settled }),
     markUnread: (key) => patchThread(key, { unread: true }),
