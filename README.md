@@ -60,10 +60,10 @@ The client should depend on Hermes's gateway contract rather than importing broa
 
 ## Source references
 
-The local reference checkouts are kept outside this repository:
+t3rmes borrows from two upstream projects, which are not vendored into this repository:
 
-- T3 Code: `/home/gijs/Work/digitalbase/t3code`
-- Hermes Agent: `/home/gijs/Work/hermes/hermes-agent`
+- T3 Code: [pingdotgg/t3code](https://github.com/pingdotgg/t3code)
+- Hermes Agent: [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
 
 Use T3's `apps/desktop` and `packages/client-runtime` for shell/runtime patterns. Use Hermes's `apps/desktop/electron`, `apps/desktop/src`, `apps/shared`, and gateway implementation for the backend contract.
 
