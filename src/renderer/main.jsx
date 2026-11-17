@@ -25,6 +25,7 @@ import {
   SquareIcon,
   FolderIcon,
   ListFilterIcon,
+  KeyboardIcon,
   XIcon,
 } from 'lucide-react';
 import {
@@ -40,6 +41,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarRail,
+  useSidebar,
 } from '../t3/components/ui/sidebar.tsx';
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from '../t3/components/ui/tooltip.tsx';
 import { Button } from '../t3/components/ui/button.tsx';
@@ -73,6 +75,7 @@ import { threadStatus, threadTitle, useHermes } from './hermes.js';
 import {
   ComposerAttachButton,
   ComposerAttachmentStrip,
+  MODEL_PICKER_TOGGLE_EVENT,
   ProviderModelPicker,
   toAttachment,
   useComposerSelection,
@@ -83,6 +86,20 @@ import { composerRequiresModifier, useSendShortcut } from './chatSettings.js';
 import { Timeline } from './timeline.jsx';
 import { TimelineMinimap } from './minimap.jsx';
 import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
+import { KeybindingsSettings } from './KeybindingsSettings.jsx';
+import { setAppearanceMode, useAppearance } from './appearance.js';
+import {
+  THREAD_JUMP_COMMANDS,
+  isAppModalOpen,
+  isModelPickerOpen,
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+  shouldShowThreadJumpHintsForModifiers,
+  threadJumpIndexFromCommand,
+  useKeybindings,
+  useShortcutModifierState,
+  useThreadJumpHintVisibility,
+} from './keybindings.js';
 import '@fontsource-variable/inter';
 import './styles.css';
 
@@ -90,6 +107,7 @@ const SETTINGS_SECTIONS = [
   { id: 'general', label: 'General', icon: Settings2Icon },
   { id: 'appearance', label: 'Appearance', icon: PaletteIcon },
   { id: 'chat', label: 'Chat', icon: MessageSquareIcon },
+  { id: 'keybindings', label: 'Keybindings', icon: KeyboardIcon },
   { id: 'connections', label: 'Connections', icon: GlobeIcon },
 ];
 
@@ -202,6 +220,7 @@ function App() {
         </SidebarFooter>
         <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
+      <AppShortcuts hermes={hermes} />
       <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
         <ChatView
           thread={activeThread}
@@ -217,6 +236,41 @@ function App() {
       <SettingsModal open={settingsOpen} section={section} onSectionChange={setSection} onClose={() => setSettingsOpen(false)} hermes={hermes} />
     </SidebarProvider>
   );
+}
+
+// App-wide commands; thread jumps and traversal live in ThreadNav, next to the thread order.
+function AppShortcuts({ hermes }) {
+  const { bindings } = useKeybindings();
+  const { toggleSidebar } = useSidebar();
+  const { mode } = useAppearance();
+  const stateRef = useRef(null);
+  stateRef.current = { bindings, toggleSidebar, mode, hermes };
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.defaultPrevented || event.isComposing || isAppModalOpen()) return;
+      const { bindings, toggleSidebar, mode, hermes } = stateRef.current;
+      const command = resolveShortcutCommand(event, bindings);
+      if (!command) return;
+      const thread = hermes.activeThread;
+      const synced = hermes.syncSupported && Boolean(thread?.storedId);
+      const run = {
+        'sidebar.toggle': () => toggleSidebar(),
+        'chat.new': () => hermes.createThread(),
+        'appearance.cycle': () => setAppearanceMode(mode === 'system' ? 'light' : mode === 'light' ? 'dark' : 'system'),
+        'modelPicker.toggle': () => window.dispatchEvent(new Event(MODEL_PICKER_TOGGLE_EVENT)),
+        'thread.copyReference': () => thread?.storedId && navigator.clipboard.writeText(thread.storedId),
+        'thread.settle': () => synced && hermes.settleThread(thread.key, !thread.archived),
+        'thread.pin': () => synced && hermes.pinThread(thread.key, !thread.pinned),
+      }[command];
+      if (!run) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) run();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+  return null;
 }
 
 function ConnectionSwitcher({ hermes, onManage }) {
@@ -406,6 +460,47 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
   const orderedKeys = [...pinned, ...active, ...renderedWorking, ...renderedSettled].map((t) => t.key);
   const threadByKey = new Map(visible.map((t) => [t.key, t]));
 
+  // T3 Sidebar.tsx: mod+1..9 jumps down the visible list, mod+shift+[ / ] steps through it,
+  // and holding the jump modifier shows each row's shortcut.
+  const { bindings } = useKeybindings();
+  const jumpRef = useRef(null);
+  jumpRef.current = { bindings, orderedKeys, activeKey, onSelect };
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || isAppModalOpen() || isModelPickerOpen()) return;
+      const { bindings, orderedKeys, activeKey, onSelect } = jumpRef.current;
+      const command = resolveShortcutCommand(event, bindings);
+      let target = null;
+      if (command === 'thread.previous' || command === 'thread.next') {
+        const index = orderedKeys.indexOf(activeKey);
+        if (index === -1) target = command === 'thread.previous' ? orderedKeys.at(-1) : orderedKeys[0];
+        else target = orderedKeys[index + (command === 'thread.previous' ? -1 : 1)];
+      } else {
+        const jumpIndex = threadJumpIndexFromCommand(command);
+        if (jumpIndex === null) return;
+        target = orderedKeys[jumpIndex];
+      }
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSelection(EMPTY_SELECTION);
+      onSelect(target);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+  const modifiers = useShortcutModifierState();
+  const showJumpHints = useThreadJumpHintVisibility(
+    !isSearching && !isAppModalOpen() && shouldShowThreadJumpHintsForModifiers(modifiers, bindings),
+  );
+  const jumpLabelByKey = new Map();
+  if (showJumpHints) {
+    orderedKeys.slice(0, THREAD_JUMP_COMMANDS.length).forEach((key, index) => {
+      const label = shortcutLabelForCommand(bindings, THREAD_JUMP_COMMANDS[index]);
+      if (label) jumpLabelByKey.set(key, label);
+    });
+  }
+
   // T3 lists title matches first, then threads that matched on message content.
   const foldedQuery = trimmedQuery.toLowerCase();
   const titleResults = isSearching
@@ -543,6 +638,7 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
       variant={variant}
       isActive={thread.key === activeKey}
       isSelected={selection.keys.has(thread.key)}
+      jumpLabel={jumpLabelByKey.get(thread.key) ?? null}
       syncSupported={syncSupported && Boolean(thread.storedId)}
       onSelect={(event) => handleRowClick(event, thread)}
       onContextMenu={(event) => openContextMenu(event, thread)}
@@ -869,7 +965,18 @@ function SidebarShelfHeader({ label, count, expanded, onToggle, className }) {
   );
 }
 
-function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported, onSelect, onContextMenu, onPin, onSettle }) {
+function JumpHintBadge({ label }) {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute right-1.5 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+    >
+      {label}
+    </span>
+  );
+}
+
+function SidebarThreadRow({ thread, variant, isActive, isSelected, jumpLabel, syncSupported, onSelect, onContextMenu, onPin, onSettle }) {
   const status = threadStatus(thread);
   const topStatus = status ? STATUS_PRESENTATION[status] : null;
   const isUnread = status === 'unread';
@@ -980,6 +1087,7 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported
               </Tooltip>
             )}
           </span>
+          {jumpLabel ? <JumpHintBadge label={jumpLabel} /> : null}
         </div>
       </li>
     );
@@ -1076,6 +1184,7 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, syncSupported
             </span>
           </div>
         </div>
+        {jumpLabel ? <JumpHintBadge label={jumpLabel} /> : null}
       </div>
     </li>
   );
@@ -1562,6 +1671,7 @@ function SettingsModal({ open, section, onSectionChange, onClose, hermes }) {
                   )}
                   {section === 'appearance' && <AppearanceSettings />}
                   {section === 'chat' && <ChatSettings />}
+                  {section === 'keybindings' && <KeybindingsSettings />}
                   {section === 'connections' && (
                     <SettingsPageContainer>
                       <ConnectionsSettings hermes={hermes} />

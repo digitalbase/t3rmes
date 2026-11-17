@@ -178,6 +178,8 @@ function useFavorites() {
 }
 
 const IS_MAC = /mac/i.test(navigator.platform);
+// Fired by the modelPicker.toggle shortcut (main.jsx AppShortcuts).
+export const MODEL_PICKER_TOGGLE_EVENT = 't3rmes:model-picker-toggle';
 const jumpLabel = (index) => (index < 9 ? (IS_MAC ? `⌘${index + 1}` : `Ctrl+${index + 1}`) : null);
 
 // T3 ProviderModelPicker + ModelPickerContent + ComposerEffortColumn + ComposerPickerFooter, simplified for Hermes.
@@ -189,6 +191,20 @@ export function ProviderModelPicker({ selection, loading, disabled, onOpen, onSe
   const [favorites, toggleFavorite] = useFavorites();
   const searchInputRef = useRef(null);
   const folded = query.trim().toLowerCase();
+  const toggleRef = useRef(null);
+  toggleRef.current = () => {
+    if (open) return setOpen(false);
+    if (disabled) return;
+    setTab(null);
+    setQuery('');
+    setOpen(true);
+    onOpen?.();
+  };
+  useEffect(() => {
+    const onToggle = () => toggleRef.current();
+    window.addEventListener(MODEL_PICKER_TOGGLE_EVENT, onToggle);
+    return () => window.removeEventListener(MODEL_PICKER_TOGGLE_EVENT, onToggle);
+  }, []);
 
   // Favorites that this runtime still offers, in provider order.
   const favoriteRows = useMemo(() => {
