@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  ArrowLeftIcon,
   BotIcon,
   CheckIcon,
   ChevronsUpDownIcon,
@@ -47,7 +46,8 @@ import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from '../t3/co
 import { Button } from '../t3/components/ui/button.tsx';
 import { Kbd } from '../t3/components/ui/kbd.tsx';
 import { Switch } from '../t3/components/ui/switch.tsx';
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from '../t3/components/ui/select.tsx';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
+import { DialogBackdrop } from '../t3/components/ui/dialog.tsx';
 import { Input } from '../t3/components/ui/input.tsx';
 import {
   Menu,
@@ -72,6 +72,9 @@ import {
 import { CollapsibleSectionHeader } from '../t3/components/ui/collapsible-section-header.tsx';
 import { cn } from '../t3/lib/utils.ts';
 import { threadStatus, threadTitle, useHermes } from './hermes.js';
+import { AppearanceSettings } from './AppearanceSettings.jsx';
+import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
+import '@fontsource-variable/inter';
 import './styles.css';
 
 const SETTINGS_SECTIONS = [
@@ -126,7 +129,7 @@ function subscribeToViewportWidth(onChange) {
 
 function App() {
   const hermes = useHermes();
-  const [screen, setScreen] = useState(() => (window.location.hash === '#settings' ? 'settings' : 'chat'));
+  const [settingsOpen, setSettingsOpen] = useState(() => window.location.hash === '#settings');
   const [section, setSection] = useState('general');
   const { connections, activeThread } = hermes;
   const activeConnection = connections.connections.find((c) => c.id === connections.active);
@@ -140,7 +143,7 @@ function App() {
 
   function openConnections() {
     setSection('connections');
-    setScreen('settings');
+    setSettingsOpen(true);
   }
 
   return (
@@ -164,62 +167,43 @@ function App() {
             <span className="truncate text-muted-foreground">rmes</span>
           </span>
         </SidebarHeader>
-        {screen === 'settings' ? (
-          <SettingsNav section={section} onSelect={setSection} />
-        ) : (
-          <ThreadNav
-            hermes={hermes}
-            activeKey={activeThread.key}
-            onSelect={hermes.selectThread}
-            onNew={() => {
-              hermes.createThread();
-              setScreen('chat');
-            }}
-            onManageConnections={openConnections}
-          />
-        )}
+        <ThreadNav
+          hermes={hermes}
+          activeKey={activeThread.key}
+          onSelect={hermes.selectThread}
+          onNew={hermes.createThread}
+          onManageConnections={openConnections}
+        />
         <SidebarFooter>
           <SidebarMenu className="flex-row items-center">
-            {screen === 'settings' ? (
-              <SidebarMenuItem className="min-w-0 flex-1">
-                <SidebarMenuButton onClick={() => setScreen('chat')}>
-                  <ArrowLeftIcon />
-                  <span>Back</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ) : (
-              <SidebarMenuItem className="shrink-0">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton aria-label="Settings" size="icon" onClick={() => setScreen('settings')}>
-                        <SettingsIcon />
-                      </SidebarMenuButton>
-                    }
-                  />
-                  <TooltipPopup side="top">Settings</TooltipPopup>
-                </Tooltip>
-              </SidebarMenuItem>
-            )}
+            <SidebarMenuItem className="shrink-0">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton aria-label="Settings" size="icon" onClick={() => setSettingsOpen(true)}>
+                      <SettingsIcon />
+                    </SidebarMenuButton>
+                  }
+                />
+                <TooltipPopup side="top">Settings</TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
         <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground isolate">
-        {screen === 'settings' ? (
-          <SettingsPage section={section} hermes={hermes} />
-        ) : (
-          <ChatView
-            thread={activeThread}
-            connection={activeConnection}
-            connectionState={connections.state}
-            connectionError={connections.error}
-            onSignIn={() => hermes.signIn(connections.active).catch(() => {})}
-            onSend={hermes.send}
-            onStop={hermes.stop}
-          />
-        )}
+        <ChatView
+          thread={activeThread}
+          connection={activeConnection}
+          connectionState={connections.state}
+          connectionError={connections.error}
+          onSignIn={() => hermes.signIn(connections.active).catch(() => {})}
+          onSend={hermes.send}
+          onStop={hermes.stop}
+        />
       </SidebarInset>
+      <SettingsModal open={settingsOpen} section={section} onSectionChange={setSection} onClose={() => setSettingsOpen(false)} hermes={hermes} />
     </SidebarProvider>
   );
 }
@@ -1146,7 +1130,7 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
       ) : (
         <>
           <div ref={scrollRef} className="topbar-scroll-fade min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-5 pt-6 pb-8">
+            <div className="mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-6 px-5 pt-6 pb-8">
               {thread.loading && <Spinner className="mx-auto size-4 text-muted-foreground" />}
               {thread.messages.map((message, index) => (
                 <MessageRow key={index} message={message} />
@@ -1165,7 +1149,7 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
 
 function ConnectionBanner({ text, action }) {
   return (
-    <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 rounded-xl border border-border/60 bg-card/40 px-4 py-2.5 text-[13px] text-muted-foreground">
+    <div className="mx-auto flex w-full max-w-(--chat-content-max-width) items-center justify-between gap-3 rounded-xl border border-border/60 bg-card/40 px-4 py-2.5 text-[13px] text-muted-foreground">
       <span className="min-w-0">{text}</span>
       {action}
     </div>
@@ -1215,7 +1199,7 @@ function Composer({ draft, setDraft, running, disabled, onSubmit, onStop }) {
   return (
     <form
       onSubmit={onSubmit}
-      className="relative isolate mx-auto w-full max-w-3xl [--composer-outline:color-mix(in_srgb,var(--color-white)_5%,transparent)]"
+      className="relative isolate mx-auto w-full max-w-(--chat-content-max-width) [--composer-outline:color-mix(in_srgb,var(--color-white)_5%,transparent)]"
     >
       <div className="relative z-10 w-full rounded-[22px] bg-surface-raised after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:border after:border-(--composer-outline) after:shadow-[inset_0_1px_rgb(255_255_255/3%)]">
         <textarea
@@ -1260,126 +1244,247 @@ function Composer({ draft, setDraft, running, disabled, onSubmit, onStop }) {
   );
 }
 
+const SETTINGS_SEARCH_ITEMS = [
+  { id: 'send-on-enter', title: 'Send on Enter', section: 'general' },
+  { id: 'confirm-delete', title: 'Confirm before deleting threads', section: 'general' },
+  { id: 'working-directory', title: 'Working directory', section: 'general' },
+  { id: 'color-scheme', title: 'Color scheme', section: 'appearance' },
+  { id: 'theme', title: 'Themes', section: 'appearance' },
+  { id: 'contrast', title: 'Contrast', section: 'appearance' },
+  { id: 'glass-opacity', title: 'Glass opacity', section: 'appearance' },
+  { id: 'chat-width', title: 'Chat width', section: 'appearance' },
+  { id: 'interface-font-size', title: 'Interface font size', section: 'appearance' },
+  { id: 'runtimes', title: 'Runtimes', section: 'connections' },
+  { id: 'add-remote-runtime', title: 'Add remote runtime', section: 'connections' },
+];
+
+// T3 SettingsSidebarNav.tsx: search, then the section list.
 function SettingsNav({ section, onSelect }) {
-  return (
-    <SidebarContent className="overflow-x-hidden">
-      <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
-        <div className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover">
-          <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-          <input
-            type="search"
-            placeholder="Search"
-            className="min-w-0 flex-1 bg-transparent text-sm font-medium text-sidebar-foreground outline-none placeholder:text-sidebar-muted-foreground"
-          />
-          <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">/</Kbd>
-        </div>
-        <SidebarMenu className="ps-px">
-          {SETTINGS_SECTIONS.map((item) => (
-            <SidebarMenuItem key={item.id}>
-              <SidebarMenuButton isActive={section === item.id} onClick={() => onSelect(item.id)}>
-                <item.icon />
-                <span className="truncate">{item.label}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
-      </SidebarGroup>
-    </SidebarContent>
-  );
-}
+  const searchInputRef = useRef(null);
+  const [query, setQuery] = useState('');
+  const [activeResultIndex, setActiveResultIndex] = useState(0);
+  const folded = query.trim().toLowerCase();
+  const isSearching = folded.length > 0;
+  const sectionById = Object.fromEntries(SETTINGS_SECTIONS.map((item) => [item.id, item]));
+  const results = isSearching
+    ? SETTINGS_SEARCH_ITEMS.filter((item) => item.title.toLowerCase().includes(folded) || sectionById[item.section].label.toLowerCase().includes(folded))
+    : [];
+  const choose = (item) => {
+    onSelect(item.section);
+    setQuery('');
+  };
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== '/' || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
-function SettingsSection({ title, children }) {
   return (
-    <section className="space-y-2.5">
-      <div className="flex min-h-7 items-start justify-between gap-4 px-3 sm:px-4">
-        <h2 className="flex min-h-7 items-center gap-2 text-sm font-normal tracking-[-0.005em] text-foreground/70">{title}</h2>
-      </div>
-      <div className="relative overflow-visible rounded-xl border border-border/60 bg-card/40 text-foreground shadow-xs/5 [&>*+*]:border-t [&>*+*]:border-border/50">
-        {children}
-      </div>
-    </section>
-  );
-}
-
-function SettingsRow({ title, description, control }) {
-  return (
-    <div className="@container/settings-row px-3 py-3 sm:px-4">
-      <div className="flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-8">
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">{title}</h3>
+    <nav role="navigation" aria-label="Settings sections" className="flex w-60 shrink-0 flex-col border-e bg-sidebar text-sidebar-foreground max-md:w-14">
+      <SidebarContent className="overflow-x-hidden">
+        <SidebarGroup>
+          <div className="flex flex-col gap-2">
+            <div className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground max-md:hidden">
+              <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+              <SidebarInput
+                ref={searchInputRef}
+                nativeInput
+                type="text"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.currentTarget.value);
+                  setActiveResultIndex(0);
+                }}
+                onKeyDown={(event) => {
+                  if (!isSearching) return;
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    const step = event.key === 'ArrowDown' ? 1 : -1;
+                    setActiveResultIndex((index) => (index + step + results.length) % Math.max(results.length, 1));
+                  } else if (event.key === 'Enter' && results[activeResultIndex]) {
+                    event.preventDefault();
+                    choose(results[activeResultIndex]);
+                  } else if (event.key === 'Escape') {
+                    // Clear the search instead of closing Settings.
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setQuery('');
+                  }
+                }}
+                placeholder="Search"
+                aria-label="Search settings"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={isSearching && results.length > 0}
+                aria-controls={isSearching && results.length > 0 ? 'settings-search-results' : undefined}
+                aria-activedescendant={isSearching && results[activeResultIndex] ? `settings-search-result-${results[activeResultIndex].id}` : undefined}
+                className="min-w-0 flex-1"
+              />
+              {isSearching ? (
+                <Button
+                  type="button"
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  className="shrink-0"
+                  aria-label="Clear settings search"
+                  onClick={() => {
+                    setQuery('');
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  <XIcon className="size-3" />
+                </Button>
+              ) : (
+                <Kbd>/</Kbd>
+              )}
+            </div>
+            {isSearching && results.length === 0 ? (
+              <p role="status" className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground">
+                No settings found
+              </p>
+            ) : null}
+            {isSearching ? (
+              <SidebarMenu id="settings-search-results" role="listbox" aria-label="Settings search results">
+                {results.map((item, index) => {
+                  const Icon = sectionById[item.section].icon;
+                  return (
+                    <SidebarMenuItem key={item.id} role="presentation">
+                      <SidebarMenuButton
+                        id={`settings-search-result-${item.id}`}
+                        role="option"
+                        aria-selected={index === activeResultIndex}
+                        tabIndex={-1}
+                        size="sm"
+                        isActive={index === activeResultIndex}
+                        className="h-auto min-h-10 items-start"
+                        onMouseMove={() => setActiveResultIndex(index)}
+                        onClick={() => choose(item)}
+                      >
+                        <Icon className="size-4 shrink-0 text-(--sidebar-icon-color)" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-sidebar-foreground">{item.title}</span>
+                          <span className="block truncate text-2xs text-sidebar-muted-foreground/75">{sectionById[item.section].label}</span>
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            ) : (
+              <SidebarMenu>
+                {SETTINGS_SECTIONS.map((item) => (
+                  <SidebarMenuItem key={item.id}>
+                    <SidebarMenuButton aria-current={section === item.id ? 'page' : undefined} isActive={section === item.id} onClick={() => onSelect(item.id)}>
+                      <item.icon />
+                      <span className="truncate max-md:sr-only">{item.label}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            )}
           </div>
-          {description ? <p className="max-w-xl text-[13px] leading-[1.45] text-muted-foreground/80">{description}</p> : null}
-        </div>
-        {control ? (
-          <div className="flex w-full min-w-0 shrink-0 items-center gap-2 @min-[32rem]/settings-row:w-auto @min-[32rem]/settings-row:justify-end">
-            {control}
-          </div>
-        ) : null}
-      </div>
-    </div>
+        </SidebarGroup>
+      </SidebarContent>
+    </nav>
   );
 }
 
-function SettingsSelect({ value, options, label }) {
-  const [current, setCurrent] = useState(value);
-  return (
-    <Select value={current} onValueChange={setCurrent}>
-      <SelectTrigger size="sm" className="w-full sm:w-40" aria-label={label}>
-        <SelectValue>{options.find((o) => o.value === current)?.label}</SelectValue>
-      </SelectTrigger>
-      <SelectPopup align="end" alignItemWithTrigger={false}>
-        {options.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            {option.label}
-          </SelectItem>
-        ))}
-      </SelectPopup>
-    </Select>
-  );
-}
-
-function SettingsPage({ section, hermes }) {
+// T3 AppRouteModal.tsx: the large Settings modal. Esc, the close button or a backdrop press closes it.
+function SettingsModal({ open, section, onSectionChange, onClose, hermes }) {
+  const backdropPressRef = useRef(false);
+  const popupRef = useRef(null);
   const label = SETTINGS_SECTIONS.find((item) => item.id === section)?.label;
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <PageHeader>
-        <nav className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground">Settings</span>
-          <span className="text-muted-foreground/50">/</span>
-          <span className="font-medium text-foreground">{label}</span>
-        </nav>
-      </PageHeader>
-      <div className="topbar-scroll-fade flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-5 pt-6 pb-12 sm:px-6">
-          {section === 'general' && (
-            <>
-              <SettingsSection title="Behavior">
-                <SettingsRow title="Send on Enter" description="Press Shift+Enter to insert a new line instead." control={<Switch defaultChecked />} />
-                <SettingsRow title="Confirm before deleting threads" description="Ask before a thread is removed." control={<Switch defaultChecked />} />
-              </SettingsSection>
-              <SettingsSection title="Workspace">
-                <SettingsRow
-                  title="Working directory"
-                  description="The folder Hermes uses for files and commands."
-                  control={<code className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">~/Work</code>}
-                />
-              </SettingsSection>
-            </>
-          )}
-          {section === 'appearance' && (
-            <SettingsSection title="Theme">
-              <SettingsRow
-                title="Appearance"
-                description="Follow the operating system or pick a mode."
-                control={<SettingsSelect label="Appearance" value="dark" options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} />}
-              />
-            </SettingsSection>
-          )}
-          {section === 'connections' && <ConnectionsSettings hermes={hermes} />}
-        </div>
-      </div>
-    </div>
+    <DialogPrimitive.Root
+      open={open}
+      disablePointerDismissal
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) return;
+        // Commit-on-blur fields lose typed text if the popup unmounts while focused.
+        const focused = document.activeElement;
+        if (focused instanceof HTMLElement && popupRef.current?.contains(focused)) focused.blur();
+        onClose();
+      }}
+    >
+      <DialogPrimitive.Portal>
+        <DialogBackdrop />
+        <DialogPrimitive.Viewport
+          // Electron hit-tests drag regions under the backdrop regardless of z-index.
+          className="fixed inset-0 z-50 flex items-center justify-center [-webkit-app-region:no-drag] sm:p-6 lg:p-10"
+          onPointerDown={(event) => {
+            backdropPressRef.current = event.target === event.currentTarget;
+          }}
+          onClick={(event) => {
+            if (backdropPressRef.current && event.target === event.currentTarget) onClose();
+            backdropPressRef.current = false;
+          }}
+        >
+          <DialogPrimitive.Popup
+            ref={popupRef}
+            initialFocus={popupRef}
+            finalFocus={false}
+            aria-label="Settings"
+            data-slot="dialog-popup"
+            data-app-modal=""
+            className="relative flex size-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground outline-none transition-[opacity,scale] duration-150 ease-out [-webkit-app-region:no-drag] data-ending-style:scale-[0.985] data-ending-style:opacity-0 data-starting-style:scale-[0.985] data-starting-style:opacity-0 sm:max-h-[60rem] sm:max-w-[80rem] sm:rounded-2xl sm:border sm:shadow-2xl/40"
+          >
+            <div className="relative flex min-h-0 flex-1">
+              <SettingsNav section={section} onSelect={onSectionChange} />
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <header className="flex h-12 shrink-0 items-center gap-3 border-b ps-5 pe-2">
+                  <nav aria-label="Settings breadcrumb" className="min-w-0">
+                    <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-sm sm:gap-3">
+                      <li className="flex min-w-0 shrink-0 items-center font-medium text-muted-foreground">Settings</li>
+                      <li aria-hidden="true" className="flex shrink-0 items-center text-icon-muted">
+                        /
+                      </li>
+                      <li aria-current="page" className="flex min-w-0 items-center truncate font-medium text-foreground">
+                        {label}
+                      </li>
+                    </ol>
+                  </nav>
+                  <div className="ms-auto flex shrink-0 items-center gap-1">
+                    <Tooltip>
+                      <TooltipTrigger render={<DialogPrimitive.Close aria-label="Close" render={<Button size="icon-sm" variant="ghost" />} />}>
+                        <XIcon />
+                      </TooltipTrigger>
+                      <TooltipPopup side="bottom">Close (Esc)</TooltipPopup>
+                    </Tooltip>
+                  </div>
+                </header>
+                <div className="flex min-h-0 flex-1 flex-col">
+                  {section === 'general' && (
+                    <SettingsPageContainer>
+                      <SettingsSection title="Behavior">
+                        <SettingsRow title="Send on Enter" description="Press Shift+Enter to insert a new line instead." control={<Switch defaultChecked />} />
+                        <SettingsRow title="Confirm before deleting threads" description="Ask before a thread is removed." control={<Switch defaultChecked />} />
+                      </SettingsSection>
+                      <SettingsSection title="Workspace">
+                        <SettingsRow
+                          title="Working directory"
+                          description="The folder Hermes uses for files and commands."
+                          control={<code className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">~/Work</code>}
+                        />
+                      </SettingsSection>
+                    </SettingsPageContainer>
+                  )}
+                  {section === 'appearance' && <AppearanceSettings />}
+                  {section === 'connections' && (
+                    <SettingsPageContainer>
+                      <ConnectionsSettings hermes={hermes} />
+                    </SettingsPageContainer>
+                  )}
+                </div>
+              </div>
+            </div>
+          </DialogPrimitive.Popup>
+        </DialogPrimitive.Viewport>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
 
