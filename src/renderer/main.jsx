@@ -80,6 +80,7 @@ import {
 } from './composer.jsx';
 import { AppearanceSettings } from './AppearanceSettings.jsx';
 import { Timeline } from './timeline.jsx';
+import { TimelineMinimap } from './minimap.jsx';
 import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
 import '@fontsource-variable/inter';
 import './styles.css';
@@ -1175,11 +1176,14 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
         </div>
       ) : (
         <>
-          <div ref={scrollRef} className="topbar-scroll-fade min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-3 px-5 pt-6 pb-8">
-              {thread.loading && <Spinner className="mx-auto size-4 text-muted-foreground" />}
-              <Timeline key={thread.key} thread={thread} />
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <div ref={scrollRef} className="topbar-scroll-fade min-h-0 flex-1 overflow-y-auto">
+              <div data-timeline-root className="mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-3 px-5 pt-6 pb-8">
+                {thread.loading && <Spinner className="mx-auto size-4 text-muted-foreground" />}
+                <Timeline key={thread.key} thread={thread} />
+              </div>
             </div>
+            <TimelineMinimap key={thread.key} scrollRef={scrollRef} messages={thread.messages} />
           </div>
           <div className="flex flex-col gap-3 px-5 pb-5">
             {banner}

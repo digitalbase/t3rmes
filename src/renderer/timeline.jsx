@@ -475,7 +475,7 @@ function MessageBlock({ message, meta, metaVisible }) {
 
 // ─── Timeline ───
 
-function splitTurns(messages) {
+export function splitTurns(messages) {
   const turns = [];
   let current = { user: null, items: [] };
   for (const message of messages) {
