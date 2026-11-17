@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, nativeTheme } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, nativeTheme, shell } = require('electron');
 const path = require('node:path');
 const { createHermesService } = require('./hermes.cjs');
 
@@ -24,6 +24,16 @@ function createWindow() {
   });
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+  // Links in chat open in the system browser, never inside the app window.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('http://127.0.0.1:5175') || url.startsWith('file:')) return;
+    event.preventDefault();
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
   });
 
   if (isDev) mainWindow.loadURL('http://127.0.0.1:5175');

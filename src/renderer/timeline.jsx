@@ -22,6 +22,7 @@ import { observeVisibleAnimation } from '../t3/lib/visibleAnimation.ts';
 import { cn } from '../t3/lib/utils.ts';
 import { MessageAttachments } from './composer.jsx';
 import { useToolCallVisibility } from './chatSettings.js';
+import { ChatMarkdown } from './markdown.jsx';
 
 // Ported from T3 Code's timeline (MessagesTimeline, TimelineWorkGroupRows, WorkLog), reduced to what
 // Hermes reports: tool start/complete with args, results and diffs, streamed reasoning, turn timing.
@@ -468,7 +469,7 @@ function MessageBlock({ message, meta, metaVisible }) {
   if (!text) return null;
   return (
     <div className="group/assistant relative min-w-0 px-1 py-1">
-      <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{text}</div>
+      <ChatMarkdown text={text} isStreaming={Boolean(message.streaming)} />
       {meta && !message.streaming ? <AssistantMeta message={message} alwaysVisible={metaVisible} /> : null}
     </div>
   );
