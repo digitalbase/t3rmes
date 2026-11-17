@@ -79,6 +79,7 @@ import {
   useComposerSelection,
 } from './composer.jsx';
 import { AppearanceSettings } from './AppearanceSettings.jsx';
+import { ChatSettings } from './ChatSettings.jsx';
 import { Timeline } from './timeline.jsx';
 import { TimelineMinimap } from './minimap.jsx';
 import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
@@ -88,6 +89,7 @@ import './styles.css';
 const SETTINGS_SECTIONS = [
   { id: 'general', label: 'General', icon: Settings2Icon },
   { id: 'appearance', label: 'Appearance', icon: PaletteIcon },
+  { id: 'chat', label: 'Chat', icon: MessageSquareIcon },
   { id: 'connections', label: 'Connections', icon: GlobeIcon },
 ];
 
@@ -1543,6 +1545,7 @@ function SettingsModal({ open, section, onSectionChange, onClose, hermes }) {
                     </SettingsPageContainer>
                   )}
                   {section === 'appearance' && <AppearanceSettings />}
+                  {section === 'chat' && <ChatSettings />}
                   {section === 'connections' && (
                     <SettingsPageContainer>
                       <ConnectionsSettings hermes={hermes} />

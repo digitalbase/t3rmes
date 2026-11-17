@@ -21,6 +21,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from '../t3/components/ui/toolt
 import { observeVisibleAnimation } from '../t3/lib/visibleAnimation.ts';
 import { cn } from '../t3/lib/utils.ts';
 import { MessageAttachments } from './composer.jsx';
+import { useToolCallVisibility } from './chatSettings.js';
 
 // Ported from T3 Code's timeline (MessagesTimeline, TimelineWorkGroupRows, WorkLog), reduced to what
 // Hermes reports: tool start/complete with args, results and diffs, streamed reasoning, turn timing.
@@ -492,13 +493,28 @@ export function splitTurns(messages) {
 
 const isWork = (m) => m.role === 'tool' || m.role === 'reasoning';
 
-function Turn({ turn, live, isLast, startedAt, cwd, expanded, onToggle }) {
-  const { items } = turn;
+// presentation.workEntryHiddenByToolCallVisibility: questions are never hidden; reasoning is not a tool call.
+function hiddenByVisibility(item, visibility) {
+  if (visibility === 'showAll' || item.role !== 'tool' || toolAction(item) === 'question') return false;
+  if (visibility === 'hideSuccessful') return !item.running && !item.failed;
+  return true;
+}
+
+// Zen keeps the turn's final answer plus what always shows: questions, errors, notices.
+function zenItems(items, live) {
+  const terminalIndex = live ? -1 : items.findLastIndex((m) => m.role === 'assistant' && m.text);
+  return items.filter(
+    (m, index) => index === terminalIndex || m.role === 'error' || m.role === 'notice' || (m.role === 'tool' && toolAction(m) === 'question'),
+  );
+}
+
+function Turn({ turn, live, isLast, startedAt, cwd, expanded, onToggle, visibility }) {
+  const items = visibility === 'zen' ? zenItems(turn.items, live) : turn.items.filter((m) => !hiddenByVisibility(m, visibility));
   const terminalIndex = live ? -1 : items.findLastIndex((m) => m.role === 'assistant' && m.text);
   const terminal = items[terminalIndex];
   const before = terminalIndex >= 0 ? items.slice(0, terminalIndex) : items;
   const after = terminalIndex >= 0 ? items.slice(terminalIndex + 1) : [];
-  const foldable = terminal && before.some(isWork);
+  const foldable = visibility !== 'zen' && terminal && before.some(isWork);
 
   if (live) {
     const last = items[items.length - 1];
@@ -509,7 +525,7 @@ function Turn({ turn, live, isLast, startedAt, cwd, expanded, onToggle }) {
         <WorkingRow startedAt={startedAt} />
         <div className="flex min-w-0 flex-col pt-1">
           <WorkItems items={items} cwd={cwd} live />
-          {waiting && !(last?.role === 'assistant' && last.text) ? <ThinkingRow /> : null}
+          {visibility !== 'zen' && waiting && !(last?.role === 'assistant' && last.text) ? <ThinkingRow /> : null}
         </div>
       </>
     );
@@ -552,6 +568,7 @@ function Turn({ turn, live, isLast, startedAt, cwd, expanded, onToggle }) {
 
 export function Timeline({ thread }) {
   const [unfolded, setUnfolded] = useState(() => new Set());
+  const visibility = useToolCallVisibility();
   const turns = splitTurns(thread.messages);
   return turns.map((turn, index) => {
     const isLast = index === turns.length - 1;
@@ -563,6 +580,7 @@ export function Timeline({ thread }) {
           isLast={isLast}
           startedAt={thread.runningSince}
           cwd={thread.cwd}
+          visibility={visibility}
           expanded={unfolded.has(index)}
           onToggle={() =>
             setUnfolded((current) => {
