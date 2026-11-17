@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('t3rmes', {
   request: (method, params) => ipcRenderer.invoke('hermes:request', method, params),
   sessions: {
     list: () => ipcRenderer.invoke('hermes:sessions:list'),
+    search: (query) => ipcRenderer.invoke('hermes:sessions:search', query),
     update: (id, patch) => ipcRenderer.invoke('hermes:sessions:update', id, patch),
   },
   showContextMenu: (items) => ipcRenderer.invoke('context-menu:show', items),

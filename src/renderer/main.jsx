@@ -25,6 +25,9 @@ import {
   SettingsIcon,
   SquarePenIcon,
   SquareIcon,
+  FolderIcon,
+  ListFilterIcon,
+  XIcon,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -32,6 +35,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarHeader,
+  SidebarInput,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
@@ -56,6 +60,15 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from '../t3/components/ui/menu.tsx';
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxSearchInput,
+  ComboboxTrigger,
+} from '../t3/components/ui/combobox.tsx';
 import { CollapsibleSectionHeader } from '../t3/components/ui/collapsible-section-header.tsx';
 import { cn } from '../t3/lib/utils.ts';
 import { threadStatus, threadTitle, useHermes } from './hermes.js';
@@ -315,6 +328,20 @@ const shelfRows = (list, expanded, activeKey) => (expanded ? list : list.filter(
 
 const EMPTY_SELECTION = { keys: new Set(), anchor: null };
 
+const PROJECT_SCOPE_STORAGE_KEY = 't3rmes_project_scope';
+
+function readStoredProjectScope() {
+  try {
+    const value = JSON.parse(localStorage.getItem(PROJECT_SCOPE_STORAGE_KEY) ?? '[]');
+    return Array.isArray(value) ? value.filter((key) => typeof key === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+// Hermes FTS snippets wrap hits in >>> <<< markers.
+const cleanSearchSnippet = (snippet) => (snippet || '').replace(/>>>|<<</g, '').replace(/\s+/g, ' ').trim();
+
 function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) {
   const { threads, syncSupported } = hermes;
   const [settledExpanded, toggleSettled] = useShelfExpanded(SETTLED_SHELF_STORAGE_KEY);
@@ -338,8 +365,40 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selection.keys.size]);
 
+  const [projectScope, setProjectScopeState] = useState(readStoredProjectScope);
+  const setProjectScope = (keys) => {
+    localStorage.setItem(PROJECT_SCOPE_STORAGE_KEY, JSON.stringify(keys));
+    setProjectScopeState(keys);
+    clearSelection();
+  };
+  const searchInputRef = useRef(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchHighlight, setSearchHighlight] = useState(0);
+  const [serverSearch, setServerSearch] = useState({ query: '', results: [] });
+  const trimmedQuery = searchQuery.trim();
+  const isSearching = trimmedQuery.length > 0;
+  useEffect(() => {
+    if (!isSearching || !window.t3rmes?.sessions?.search) return;
+    let cancelled = false;
+    const id = window.setTimeout(async () => {
+      try {
+        const { results = [] } = await window.t3rmes.sessions.search(trimmedQuery);
+        if (!cancelled) setServerSearch({ query: trimmedQuery, results });
+      } catch {
+        if (!cancelled) setServerSearch({ query: trimmedQuery, results: [] });
+      }
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+    };
+  }, [isSearching, trimmedQuery]);
+
   // Unsent new threads only show while they are open, like T3 drafts.
-  const visible = threads.filter((t) => t.storedId || t.messages.length > 0 || t.key === activeKey);
+  const allVisible = threads.filter((t) => t.storedId || t.messages.length > 0 || t.key === activeKey);
+  const projects = [...new Set(allVisible.map(projectLabel).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const scope = projectScope.filter((key) => projects.includes(key));
+  const visible = scope.length === 0 ? allVisible : allVisible.filter((t) => scope.includes(projectLabel(t)) || t.key === activeKey);
   const byRecent = (a, b) => (a.storedId ? 0 : 1) - (b.storedId ? 0 : 1) || b.lastActive - a.lastActive;
   const isWorking = (t) => threadStatus(t) === 'working';
   const pinned = visible.filter((t) => t.pinned && !t.archived).sort(byRecent);
@@ -351,6 +410,61 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
   const renderedSettled = shelfRows(settled, settledExpanded, activeKey);
   const orderedKeys = [...pinned, ...active, ...renderedWorking, ...renderedSettled].map((t) => t.key);
   const threadByKey = new Map(visible.map((t) => [t.key, t]));
+
+  // T3 lists title matches first, then threads that matched on message content.
+  const foldedQuery = trimmedQuery.toLowerCase();
+  const titleResults = isSearching
+    ? visible.filter((t) => threadTitle(t).toLowerCase().includes(foldedQuery)).sort((a, b) => b.lastActive - a.lastActive)
+    : [];
+  const titleResultKeys = new Set(titleResults.map((t) => t.key));
+  const threadByStoredId = new Map(visible.filter((t) => t.storedId).map((t) => [t.storedId, t]));
+  const searchMatchByKey = new Map();
+  const contentResults = [];
+  if (isSearching && serverSearch.query) {
+    for (const hit of serverSearch.results) {
+      const thread = threadByStoredId.get(hit.session_id) ?? threadByStoredId.get(hit.id);
+      if (!thread || searchMatchByKey.has(thread.key)) continue;
+      if (hit.role === 'user' || hit.role === 'assistant') {
+        searchMatchByKey.set(thread.key, { source: hit.role, snippet: cleanSearchSnippet(hit.snippet), query: serverSearch.query });
+      }
+      if (!titleResultKeys.has(thread.key)) contentResults.push(thread);
+    }
+  }
+  const searchResults = [...titleResults, ...contentResults];
+  const activeSearchIndex = Math.min(searchHighlight, Math.max(0, searchResults.length - 1));
+  const searchPending = isSearching && serverSearch.query !== trimmedQuery;
+
+  function changeSearchQuery(value) {
+    setSearchQuery(value);
+    setSearchHighlight(0);
+  }
+
+  function selectSearchResult(thread) {
+    changeSearchQuery('');
+    onSelect(thread.key);
+  }
+
+  function handleSearchKeyDown(event) {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape' && isSearching) {
+      event.preventDefault();
+      event.stopPropagation();
+      changeSearchQuery('');
+      return;
+    }
+    if (searchResults.length === 0) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      setSearchHighlight((activeSearchIndex + step + searchResults.length) % searchResults.length);
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const result = searchResults[activeSearchIndex];
+      if (result) selectSearchResult(result);
+    }
+  }
 
   function handleRowClick(event, thread) {
     const isMac = /mac/i.test(navigator.platform);
@@ -446,16 +560,54 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
     <SidebarContent
       className="min-h-full overflow-x-hidden"
       fixedHeader={
-        <SidebarGroup className="z-[1] pt-0">
-          <div className="flex items-center gap-1">
+        <SidebarGroup className="z-[1] gap-1 pt-0">
+          <div className="flex items-center">
             <ConnectionSwitcher hermes={hermes} onManage={onManageConnections} />
-            <SidebarHeaderIconButton label="New thread" onClick={onNew}>
-              <SquarePenIcon />
-            </SidebarHeaderIconButton>
           </div>
+          <SidebarThreadHeader
+            searchInputRef={searchInputRef}
+            searchQuery={searchQuery}
+            onSearchQueryChange={changeSearchQuery}
+            onSearchKeyDown={handleSearchKeyDown}
+            isSearching={isSearching}
+            searchResultCount={searchResults.length}
+            activeSearchResultIndex={activeSearchIndex}
+            onClearSearch={() => changeSearchQuery('')}
+            projectScope={
+              projects.length > 0 ? <ProjectScopeFilter projects={projects} scope={scope} onScopeChange={setProjectScope} /> : null
+            }
+            onNewThread={onNew}
+          />
         </SidebarGroup>
       }
     >
+      {isSearching ? (
+        <SidebarGroup className="flex-1 pt-0">
+          {searchResults.length > 0 ? (
+            <TooltipProvider delay={150} closeDelay={0} timeout={400}>
+              <ul id="sidebar-thread-search-results" role="listbox" aria-label="Thread search results" className="flex flex-col gap-px">
+                {searchResults.map((thread, index) => (
+                  <SidebarSearchResultRow
+                    key={thread.key}
+                    thread={thread}
+                    resultId={`sidebar-thread-search-result-${index}`}
+                    isSettled={thread.archived}
+                    isHighlighted={index === activeSearchIndex}
+                    isRouteActive={thread.key === activeKey}
+                    searchMatch={searchMatchByKey.get(thread.key) ?? null}
+                    onHighlight={() => setSearchHighlight(index)}
+                    onSelect={() => selectSearchResult(thread)}
+                  />
+                ))}
+              </ul>
+            </TooltipProvider>
+          ) : (
+            <p role="status" className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground">
+              {searchPending ? 'Searching thread messages…' : 'No threads found'}
+            </p>
+          )}
+        </SidebarGroup>
+      ) : (
       <SidebarGroup className="flex-1 ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pt-0 pb-1">
         <TooltipProvider delay={150} closeDelay={0} timeout={400}>
         <ul role="list" className="relative flex flex-1 flex-col gap-px">
@@ -478,6 +630,7 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
         </ul>
         </TooltipProvider>
       </SidebarGroup>
+      )}
     </SidebarContent>
   );
 }
@@ -496,9 +649,220 @@ function SidebarHeaderIconButton({ label, className, children, ...rest }) {
   );
 }
 
+// T3 SidebarThreadHeader.tsx: search pill, project filter, new thread.
+function SidebarThreadHeader({
+  searchInputRef,
+  searchQuery,
+  onSearchQueryChange,
+  onSearchKeyDown,
+  isSearching,
+  searchResultCount,
+  activeSearchResultIndex,
+  onClearSearch,
+  projectScope,
+  onNewThread,
+}) {
+  const resultsVisible = isSearching && searchResultCount > 0;
+  const activeResultExists = resultsVisible && activeSearchResultIndex < searchResultCount;
+  return (
+    <div className="flex items-center gap-1">
+      <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-within:bg-sidebar-row-hover focus-within:text-sidebar-foreground focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring/70">
+        <SearchIcon className="size-4 shrink-0 text-(--sidebar-icon-color)" />
+        <SidebarInput
+          ref={searchInputRef}
+          nativeInput
+          type="search"
+          value={searchQuery}
+          onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
+          onKeyDown={onSearchKeyDown}
+          placeholder="Search"
+          aria-label="Search threads"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={resultsVisible}
+          aria-controls={resultsVisible ? 'sidebar-thread-search-results' : undefined}
+          aria-activedescendant={activeResultExists ? `sidebar-thread-search-result-${activeSearchResultIndex}` : undefined}
+          className="min-w-0 flex-1"
+        />
+        {isSearching ? (
+          <Button
+            type="button"
+            size="icon-micro"
+            variant="ghost-muted"
+            className="shrink-0"
+            aria-label="Clear thread search"
+            onClick={() => {
+              onClearSearch();
+              searchInputRef.current?.focus();
+            }}
+          >
+            <XIcon className="size-3" />
+          </Button>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center">
+        {projectScope}
+        <SidebarHeaderIconButton label="New thread" onClick={onNewThread}>
+          <SquarePenIcon />
+        </SidebarHeaderIconButton>
+      </div>
+    </div>
+  );
+}
+
+// T3 Sidebar.tsx ProjectScopeRowIcon.
+function ProjectScopeRowIcon({ isSelected, children }) {
+  return (
+    <span className="relative flex shrink-0">
+      {children}
+      {isSelected ? (
+        <span className="pointer-events-none absolute -right-1 -bottom-1 grid size-3 place-items-center rounded-full bg-primary ring-2 ring-popover">
+          <CheckIcon className="size-2 text-primary-foreground" strokeWidth={4} aria-hidden />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+// T3's project-scope Combobox; Hermes projects are repo/cwd basenames. Shift+click toggles several.
+function ProjectScopeFilter({ projects, scope, onScopeChange }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const items = [{ value: 'all', label: 'All projects' }, ...projects.map((p) => ({ value: p, label: p }))];
+  const folded = query.trim().toLowerCase();
+  const filteredItems = folded ? items.filter((item) => item.label.toLowerCase().includes(folded)) : items;
+  const selectedItem = scope.length === 1 ? items.find((item) => item.value === scope[0]) ?? items[0] : items[0];
+  const label = scope.length > 0 ? `Filter threads by project: ${scope.join(', ')}` : 'Filter threads by project';
+  return (
+    <Combobox
+      items={items}
+      filteredItems={filteredItems}
+      autoHighlight
+      itemToStringLabel={(item) => item.label}
+      isItemEqualToValue={(a, b) => a.value === b.value}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery('');
+      }}
+      value={selectedItem}
+      onValueChange={(item, eventDetails) => {
+        if (!item) return;
+        if (item.value === 'all') onScopeChange([]);
+        else if (eventDetails.event instanceof MouseEvent && eventDetails.event.shiftKey) {
+          eventDetails.cancel();
+          onScopeChange(scope.includes(item.value) ? scope.filter((key) => key !== item.value) : [...scope, item.value]);
+        } else onScopeChange([item.value]);
+      }}
+    >
+      <ComboboxTrigger render={<SidebarHeaderIconButton label={label} className={cn(scope.length > 0 && 'text-sidebar-foreground')} />}>
+        {scope.length > 0 ? <FolderIcon className="size-4" /> : <ListFilterIcon className="size-4" />}
+      </ComboboxTrigger>
+      <ComboboxPopup
+        align="start"
+        collisionAvoidance={{ side: 'flip', align: 'shift' }}
+        className="w-[min(18rem,var(--available-width))] overflow-hidden"
+        finalFocus={(closeType) => closeType === 'keyboard'}
+      >
+        <ComboboxSearchInput
+          aria-label="Search projects"
+          placeholder="Search projects..."
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <ComboboxEmpty>No matching projects.</ComboboxEmpty>
+        <ComboboxList aria-multiselectable>
+          {(item) => {
+            const isSelected = item.value === 'all' ? scope.length === 0 : scope.includes(item.value);
+            return (
+              <ComboboxItem key={item.value} hideIndicator value={item} aria-selected={isSelected} data-selected={undefined}>
+                <ProjectScopeRowIcon isSelected={isSelected}>
+                  <FolderIcon className="size-4 shrink-0" />
+                </ProjectScopeRowIcon>
+                <span className="min-w-0 truncate text-sm">{item.label}</span>
+                <span className="ml-auto size-7 shrink-0 sm:size-6" />
+              </ComboboxItem>
+            );
+          }}
+        </ComboboxList>
+      </ComboboxPopup>
+    </Combobox>
+  );
+}
+
+const scrollHighlightedResultIntoView = (node) => node?.scrollIntoView({ block: 'nearest' });
+
+// T3 ThreadSearchMatch.tsx ThreadSearchMatchExcerpt, query terms in semibold.
+function ThreadSearchMatchExcerpt({ match }) {
+  const isUser = match.source === 'user';
+  const terms = match.query.split(/\s+/).filter(Boolean).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const parts = terms.length ? match.snippet.split(new RegExp(`(${terms.join('|')})`, 'gi')) : [match.snippet];
+  return (
+    <span className="truncate text-xs text-muted-foreground/85">
+      <span className={isUser ? 'text-info-foreground' : 'text-success-foreground'}>{isUser ? 'You:' : 'Agent:'}</span>{' '}
+      {parts.map((part, index) =>
+        index % 2 === 1 ? (
+          <mark key={index} className="bg-transparent font-semibold text-foreground">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </span>
+  );
+}
+
+// T3 SidebarThreadRow.tsx SidebarSearchResultRow.
+function SidebarSearchResultRow({ thread, resultId, isSettled, isHighlighted, isRouteActive, searchMatch, onHighlight, onSelect }) {
+  const project = projectLabel(thread);
+  return (
+    <li ref={isHighlighted ? scrollHighlightedResultIntoView : undefined} role="presentation" className="list-none">
+      <button
+        id={resultId}
+        type="button"
+        role="option"
+        tabIndex={-1}
+        aria-selected={isHighlighted}
+        aria-current={isRouteActive ? 'page' : undefined}
+        onMouseMove={onHighlight}
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={onSelect}
+        className={cn(
+          'group/sidebar-row flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1 text-left text-sm outline-none',
+          isHighlighted || isRouteActive
+            ? 'bg-sidebar-row-active text-sidebar-foreground'
+            : 'text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground',
+        )}
+      >
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex min-w-0 items-center gap-2.5">
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate',
+                isSettled ? 'font-normal text-secondary-label/70 group-hover/sidebar-row:text-foreground' : 'font-medium text-foreground',
+                (isHighlighted || isRouteActive) && 'text-foreground',
+              )}
+            >
+              {threadTitle(thread)}
+            </span>
+            <span className="w-8 shrink-0 text-right text-xs text-muted-foreground/55 tabular-nums">{compactTimeLabel(thread.lastActive)}</span>
+          </span>
+          {searchMatch ? (
+            <ThreadSearchMatchExcerpt match={searchMatch} />
+          ) : project ? (
+            <span className="truncate text-xs text-muted-foreground/70">{project}</span>
+          ) : null}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 function SidebarShelfHeader({ label, count, expanded, onToggle, className }) {
   return (
-    <li className={cn('relative mx-0.5 h-8 list-none', className)}>
+    // -ms-px cancels the list's +1px card inset: the header's edge meets the footer buttons' and its label the cog.
+    <li className={cn('relative -ms-px h-8 list-none', className)}>
       <CollapsibleSectionHeader
         onClick={onToggle}
         expanded={expanded}

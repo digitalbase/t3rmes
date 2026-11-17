@@ -38,6 +38,9 @@ ipcMain.handle('hermes:request', (_event, method, params) => hermes.request(meth
 ipcMain.handle('hermes:sessions:list', () =>
   hermes.rest('GET', '/api/sessions?limit=100&order=recent&archived=include'),
 );
+ipcMain.handle('hermes:sessions:search', (_event, query) =>
+  hermes.rest('GET', `/api/sessions/search?q=${encodeURIComponent(query)}&limit=20`),
+);
 ipcMain.handle('hermes:sessions:update', (_event, id, patch) => hermes.updateSession(id, patch));
 // Native context menu; resolves with the clicked item id or null.
 ipcMain.handle('context-menu:show', (event, items) =>
