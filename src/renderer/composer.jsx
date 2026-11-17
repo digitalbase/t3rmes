@@ -9,6 +9,7 @@ import { cn } from '../t3/lib/utils.ts';
 import nousLogo from './icons/nousresearch.svg?url';
 import openaiLogo from './icons/openai.svg?url';
 import openrouterLogo from './icons/openrouter.svg?url';
+import cliproxyLogo from './icons/cliproxy.png';
 
 // Hermes' levels (hermes_constants.VALID_REASONING_EFFORTS); `none` is thinking off.
 const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -66,9 +67,53 @@ function ComposerControl({ className, ...props }) {
 }
 
 const PROVIDER_TINTS = ['bg-violet-500/15 text-violet-600 dark:text-violet-300', 'bg-sky-500/15 text-sky-600 dark:text-sky-300', 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300', 'bg-amber-500/15 text-amber-700 dark:text-amber-300', 'bg-rose-500/15 text-rose-600 dark:text-rose-300'];
-// Brand marks: Nous Research and OpenAI from LobeHub Icons (MIT), OpenRouter from Simple Icons (CC0).
+// Brand marks: Nous Research and OpenAI from LobeHub Icons (MIT), OpenRouter from Simple Icons (CC0),
+// CLIProxyAPI from the router-for-me GitHub avatar (the project ships no logo of its own).
 const PROVIDER_LOGOS = { nous: nousLogo, openrouter: openrouterLogo, openai: openaiLogo, 'openai-codex': openaiLogo };
-function ProviderIcon({ provider, className }) {
+
+// A custom endpoint is CLIProxyAPI when its root answers {"message":"CLI Proxy API Server"} (no key needed).
+// Probed once per origin; unreachable endpoints just keep the initial.
+const cliProxyProbes = new Map();
+const cliProxyListeners = new Set();
+function probeCliProxy(apiUrl) {
+  let origin;
+  try {
+    origin = new URL(apiUrl).origin;
+  } catch {
+    return false;
+  }
+  if (!cliProxyProbes.has(origin)) {
+    cliProxyProbes.set(origin, false);
+    fetch(`${origin}/`, { signal: AbortSignal.timeout(5000) })
+      .then((response) => response.json())
+      .then((body) => {
+        if (body?.message !== 'CLI Proxy API Server') return;
+        cliProxyProbes.set(origin, true);
+        cliProxyListeners.forEach((listener) => listener());
+      })
+      .catch(() => {});
+  }
+  return cliProxyProbes.get(origin);
+}
+function useIsCliProxy(provider) {
+  const apiUrl = provider?.is_user_defined ? provider.api_url : null;
+  return useSyncExternalStore(
+    (listener) => {
+      cliProxyListeners.add(listener);
+      return () => cliProxyListeners.delete(listener);
+    },
+    () => (apiUrl ? probeCliProxy(apiUrl) : false),
+  );
+}
+
+function SidebarProviderIcon({ provider }) {
+  const isCliProxy = useIsCliProxy(provider);
+  const className = isCliProxy ? 'size-6 rounded-md' : PROVIDER_LOGOS[provider.slug] ? 'size-5 text-foreground/80' : 'size-6 rounded-md text-xs';
+  return <ProviderIcon provider={provider} isCliProxy={isCliProxy} className={className} />;
+}
+
+function ProviderIcon({ provider, isCliProxy, className }) {
+  if (isCliProxy) return <img src={cliproxyLogo} alt="" aria-hidden="true" className={cn('size-4 shrink-0 rounded-[5px] object-cover', className)} />;
   const logo = PROVIDER_LOGOS[provider?.slug];
   if (logo) {
     return (
@@ -426,7 +471,7 @@ function ProviderSidebar({ providers, showFavorites, selected, current, onSelect
                     />
                   }
                 >
-                  <ProviderIcon provider={p} className={PROVIDER_LOGOS[p.slug] ? 'size-5 text-foreground/80' : 'size-6 rounded-md text-xs'} />
+                  <SidebarProviderIcon provider={p} />
                   {p.slug === current ? <span className="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-success ring-2 ring-muted" /> : null}
                 </TooltipTrigger>
                 <TooltipPopup side="left" align="center">
