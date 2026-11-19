@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createHermesService } = require('./hermes.cjs');
 const { readOmarchyTheme, watchOmarchyTheme } = require('./omarchyTheme.cjs');
 
-const isDev = !app.isPackaged;
+const isDev = !app.isPackaged && process.env.T3RMES_PRODUCTION !== '1';
 // Lets agents drive and screenshot the dev window over CDP (127.0.0.1 only).
 if (isDev) app.commandLine.appendSwitch('remote-debugging-port', '9333');
 let mainWindow = null;
