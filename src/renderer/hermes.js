@@ -5,6 +5,14 @@ const EMPTY_CONNECTIONS = { active: 'local', state: 'idle', error: null, connect
 const REFRESH_INTERVAL_MS = 10_000;
 const LIVE_BUSY = new Set(['working', 'starting', 'waiting']);
 
+function isSessionNotFound(error) {
+  const message = (error instanceof Error ? error.message : String(error ?? ''))
+    .trim()
+    .replace(/^Error invoking remote method '[^']+':\s*Error:\s*/i, '')
+    .replace(/^Error:\s*/i, '');
+  return /^(?:4001\s*[:,-]?\s*)?session not found[.!]?$/i.test(message);
+}
+
 let nextKey = 1;
 const newThread = (fields = {}) => ({
   key: nextKey++,
@@ -535,6 +543,22 @@ export function useHermes() {
     [updateThread],
   );
 
+  const resumeThread = useCallback(
+    async (key, storedId) => {
+      const result = await bridge.request('session.resume', { session_id: storedId });
+      if (!result?.session_id) throw new Error('Hermes did not return a runtime session ID.');
+      updateThread(key, (t) => ({
+        ...t,
+        sessionId: result.session_id,
+        ...infoFields(t, result.info),
+        running: Boolean(result.running),
+        runningSince: result.running ? t.runningSince ?? Date.now() : t.runningSince,
+      }));
+      return result.session_id;
+    },
+    [updateThread],
+  );
+
   // A live session switches through config.set; a draft keeps the pick for session.create.
   const configure = useCallback(
     async (field, value, request) => {
@@ -623,15 +647,26 @@ export function useHermes() {
             };
           });
         }
-        const refs = [];
-        for (const attachment of attachments) {
-          const ref = await uploadAttachment(sessionId, attachment);
-          if (ref) refs.push(ref);
+        const submit = async (liveSessionId) => {
+          const refs = [];
+          for (const attachment of attachments) {
+            const ref = await uploadAttachment(liveSessionId, attachment);
+            if (ref) refs.push(ref);
+          }
+          const prompt =
+            [refs.join('\n'), text].filter(Boolean).join('\n\n') ||
+            (attachments.some((a) => a.kind === 'image') ? 'What do you see in this image?' : '');
+          return bridge.request('prompt.submit', { session_id: liveSessionId, text: prompt });
+        };
+        let result;
+        try {
+          result = await submit(sessionId);
+        } catch (error) {
+          const storedId = threadsRef.current.find((candidate) => candidate.key === key)?.storedId;
+          if (!storedId || !isSessionNotFound(error)) throw error;
+          sessionId = await resumeThread(key, storedId);
+          result = await submit(sessionId);
         }
-        const prompt =
-          [refs.join('\n'), text].filter(Boolean).join('\n\n') ||
-          (attachments.some((a) => a.kind === 'image') ? 'What do you see in this image?' : '');
-        const result = await bridge.request('prompt.submit', { session_id: sessionId, text: prompt });
         if (result && result.status && result.status !== 'streaming' && result.status !== 'queued') {
           updateThread(key, (t) => ({ ...t, running: false, runningSince: null, messages: closeAssistant(t.messages) }));
         }
@@ -639,7 +674,7 @@ export function useHermes() {
         updateThread(key, (t) => applyEvent(t, 'error', { message: error.message }));
       }
     },
-    [activeKey, updateThread, patchThread],
+    [activeKey, updateThread, patchThread, resumeThread],
   );
 
   const stop = useCallback(async () => {
