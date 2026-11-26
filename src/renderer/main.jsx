@@ -28,6 +28,7 @@ import {
   SquareIcon,
   FolderIcon,
   ListFilterIcon,
+  SlidersHorizontalIcon,
   KeyboardIcon,
   XIcon,
 } from 'lucide-react';
@@ -55,6 +56,7 @@ import { Input } from '../t3/components/ui/input.tsx';
 import {
   Menu,
   MenuGroup,
+  MenuCheckboxItem,
   MenuGroupLabel,
   MenuItem,
   MenuPopup,
@@ -90,6 +92,7 @@ import { Timeline } from './timeline.jsx';
 import { TimelineMinimap } from './minimap.jsx';
 import { SettingsPageContainer, SettingsRow, SettingsSection } from './settingsLayout.jsx';
 import { KeybindingsSettings } from './KeybindingsSettings.jsx';
+import { DEFAULT_SOURCE_CATEGORIES, SOURCE_CATEGORIES, setSourceCategories, sourceCategory, useSourceCategories } from './threadSettings.js';
 import { setAppearanceMode, useAppearance } from './appearance.js';
 import {
   THREAD_JUMP_COMMANDS,
@@ -262,7 +265,7 @@ function AppShortcuts({ hermes }) {
         'appearance.cycle': () => setAppearanceMode(mode === 'system' ? 'light' : mode === 'light' ? 'dark' : 'system'),
         'modelPicker.toggle': () => window.dispatchEvent(new Event(MODEL_PICKER_TOGGLE_EVENT)),
         'thread.copyReference': () => thread?.storedId && navigator.clipboard.writeText(thread.storedId),
-        'thread.settle': () => synced && hermes.settleThread(thread.key, !thread.archived),
+        'thread.settle': () => synced && hermes.settleThread(thread.key, !hermes.isSettled(thread)),
         'thread.pin': () => synced && hermes.pinThread(thread.key, !thread.pinned),
       }[command];
       if (!run) return;
@@ -469,19 +472,23 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
   }, [isSearching, trimmedQuery, profileFilter]);
 
   // Unsent new threads only show while they are open, like T3 drafts.
+  const shownSources = useSourceCategories();
   const allVisible = threads.filter(
-    (t) => (t.storedId || t.messages.length > 0 || t.key === activeKey) && (!profileFilter || t.profile === profileFilter || t.key === activeKey),
+    (t) =>
+      (t.storedId || t.messages.length > 0 || t.key === activeKey) &&
+      (t.key === activeKey || ((!profileFilter || t.profile === profileFilter) && shownSources.includes(sourceCategory(t.source)))),
   );
   const projects = [...new Set(allVisible.map(projectLabel).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const scope = projectScope.filter((key) => projects.includes(key));
   const visible = scope.length === 0 ? allVisible : allVisible.filter((t) => scope.includes(projectLabel(t)) || t.key === activeKey);
   const byRecent = (a, b) => (a.storedId ? 0 : 1) - (b.storedId ? 0 : 1) || b.lastActive - a.lastActive;
   const isWorking = (t) => threadStatus(t) === 'working';
+  const isSettled = hermes.isSettled;
   const pinned = visible.filter((t) => t.pinned && !t.archived).sort(byRecent);
-  const inbox = visible.filter((t) => !t.pinned && !t.archived);
+  const inbox = visible.filter((t) => !t.pinned && !isSettled(t));
   const active = inbox.filter((t) => !isWorking(t)).sort(byRecent);
   const working = inbox.filter(isWorking).sort((a, b) => (b.runningSince ?? 0) - (a.runningSince ?? 0));
-  const settled = visible.filter((t) => t.archived).sort((a, b) => b.lastActive - a.lastActive);
+  const settled = visible.filter(isSettled).sort((a, b) => b.lastActive - a.lastActive);
   const renderedWorking = shelfRows(working, workingExpanded, activeKey);
   const renderedSettled = shelfRows(settled, settledExpanded, activeKey);
   const orderedKeys = [...pinned, ...active, ...renderedWorking, ...renderedSettled].map((t) => t.key);
@@ -621,8 +628,8 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
     const keysOf = (list) => list.map((t) => t.key);
     const pinnedSelected = selected.filter((t) => t.pinned);
     const unpinnedSelected = selected.filter((t) => !t.pinned);
-    const settling = selected.filter((t) => !t.archived);
-    const unsettling = selected.filter((t) => t.archived);
+    const settling = selected.filter((t) => !isSettled(t));
+    const unsettling = selected.filter(isSettled);
     const clicked = await window.t3rmes.showContextMenu([
       ...(unpinnedSelected.length ? [{ id: 'pin', label: `Pin (${unpinnedSelected.length})` }] : []),
       ...(pinnedSelected.length ? [{ id: 'unpin', label: `Unpin (${pinnedSelected.length})` }] : []),
@@ -634,8 +641,8 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
     clearSelection();
     if (clicked === 'pin') hermes.patchThreads(keysOf(unpinnedSelected), { pinned: true });
     else if (clicked === 'unpin') hermes.patchThreads(keysOf(pinnedSelected), { pinned: false });
-    else if (clicked === 'settle') hermes.patchThreads(keysOf(settling), { archived: true });
-    else if (clicked === 'unsettle') hermes.patchThreads(keysOf(unsettling), { archived: false });
+    else if (clicked === 'settle') hermes.settleThreads(keysOf(settling), true);
+    else if (clicked === 'unsettle') hermes.settleThreads(keysOf(unsettling), false);
     else if (clicked === 'mark-unread') hermes.patchThreads(keysOf(selected), { unread: true });
   }
 
@@ -648,12 +655,12 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
     }
     const clicked = await window.t3rmes.showContextMenu([
       { id: 'pin', label: thread.pinned ? 'Unpin' : 'Pin' },
-      { id: 'settle', label: thread.archived ? 'Un-settle' : 'Settle' },
+      { id: 'settle', label: isSettled(thread) ? 'Un-settle' : 'Settle' },
       { id: 'unread', label: 'Mark unread' },
       { id: 'copy', label: 'Copy session ID', separatorBefore: true },
     ]);
     if (clicked === 'pin') hermes.pinThread(thread.key, !thread.pinned);
-    else if (clicked === 'settle') hermes.settleThread(thread.key, !thread.archived);
+    else if (clicked === 'settle') hermes.settleThread(thread.key, !isSettled(thread));
     else if (clicked === 'unread') hermes.markUnread(thread.key);
     else if (clicked === 'copy') navigator.clipboard.writeText(thread.storedId);
   }
@@ -701,7 +708,10 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
             activeSearchResultIndex={activeSearchIndex}
             onClearSearch={() => changeSearchQuery('')}
             projectScope={
-              projects.length > 0 ? <ProjectScopeFilter projects={projects} scope={scope} onScopeChange={setProjectScope} /> : null
+              <>
+                <SourceFilter />
+                {projects.length > 0 ? <ProjectScopeFilter projects={projects} scope={scope} onScopeChange={setProjectScope} /> : null}
+              </>
             }
             onNewThread={onNew}
           />
@@ -718,7 +728,7 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
                     key={thread.key}
                     thread={thread}
                     resultId={`sidebar-thread-search-result-${index}`}
-                    isSettled={thread.archived}
+                    isSettled={isSettled(thread)}
                     isHighlighted={index === activeSearchIndex}
                     isRouteActive={thread.key === activeKey}
                     searchMatch={searchMatchByKey.get(thread.key) ?? null}
@@ -1000,6 +1010,45 @@ function ProjectScopeRowIcon({ isSelected, children }) {
 }
 
 // T3's project-scope Combobox; Hermes projects are repo/cwd basenames. Shift+click toggles several.
+// Which kinds of Hermes sessions the sidebar lists. Defaults follow Hermes Desktop.
+function SourceFilter() {
+  const shown = useSourceCategories();
+  const isDefault = shown.length === DEFAULT_SOURCE_CATEGORIES.length && DEFAULT_SOURCE_CATEGORIES.every((id) => shown.includes(id));
+  const toggle = (id, checked) => setSourceCategories(SOURCE_CATEGORIES.map((c) => c.id).filter((c) => (c === id ? checked : shown.includes(c))));
+  return (
+    <Menu>
+      <MenuTrigger render={<SidebarHeaderIconButton label="Filter threads by source" className={cn(!isDefault && 'text-sidebar-foreground')} />}>
+        <SlidersHorizontalIcon className="size-4" />
+        {!isDefault && <span aria-hidden="true" className="absolute top-1 right-1 size-1.5 rounded-full bg-primary" />}
+      </MenuTrigger>
+      <MenuPopup side="bottom" align="end" className="w-64">
+        <MenuGroup>
+          <MenuGroupLabel>Show threads from</MenuGroupLabel>
+          {SOURCE_CATEGORIES.map((category) => (
+            <MenuCheckboxItem
+              key={category.id}
+              checked={shown.includes(category.id)}
+              closeOnClick={false}
+              onCheckedChange={(checked) => toggle(category.id, checked)}
+            >
+              <span className="flex min-w-0 flex-col">
+                <span>{category.label}</span>
+                <span className="truncate text-xs text-muted-foreground">{category.description}</span>
+              </span>
+            </MenuCheckboxItem>
+          ))}
+        </MenuGroup>
+        {!isDefault && (
+          <>
+            <MenuSeparator />
+            <MenuItem onClick={() => setSourceCategories(DEFAULT_SOURCE_CATEGORIES)}>Reset to defaults</MenuItem>
+          </>
+        )}
+      </MenuPopup>
+    </Menu>
+  );
+}
+
 function ProjectScopeFilter({ projects, scope, onScopeChange }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');

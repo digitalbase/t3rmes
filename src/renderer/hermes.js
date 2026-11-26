@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isAutoSettled, setAutoSettleKept, sourceQuery, useAutoSettleDays, useAutoSettleKept, useSourceCategories } from './threadSettings.js';
 
 const bridge = window.t3rmes;
 const EMPTY_CONNECTIONS = { active: null, state: 'idle', error: null, connections: [], importable: [] };
 const REFRESH_INTERVAL_MS = 10_000;
 // Newest sessions refetched on every refresh; older pages load on request.
 const SESSION_PAGE_SIZE = 100;
-// Cron runs are the newest rows on busy gateways and would bury conversations, as in Hermes Desktop's recents.
-const SESSION_LIST_FILTER = { excludeSources: ['cron'] };
 const PROFILE_SCOPE_KEY = (connectionId) => `t3rmes:profile-scope:${connectionId}`;
 const LAST_PROFILE_KEY = (connectionId) => `t3rmes:last-profile:${connectionId}`;
 const LIVE_BUSY = new Set(['working', 'starting', 'waiting']);
@@ -361,6 +360,13 @@ export function useHermes() {
   const [profileScope, setProfileScopeState] = useState(null);
   const profileScopeRef = useRef(profileScope);
   profileScopeRef.current = profileScope;
+  // Which session sources the sidebar lists (Settings › sidebar filter).
+  const sourceCategories = useSourceCategories();
+  const sourceKey = sourceCategories.join(',');
+  const sourceFilterRef = useRef(null);
+  sourceFilterRef.current = sourceQuery(sourceCategories);
+  const autoSettleDays = useAutoSettleDays();
+  const autoSettleKept = useAutoSettleKept();
   // How far down the session list has been paged, and how many rows the gateway has.
   const [sessionPage, setSessionPage] = useState({ loaded: 0, total: null, loading: false });
   const sessionPageRef = useRef(sessionPage);
@@ -401,7 +407,7 @@ export function useHermes() {
   }, []);
 
   const listSessions = (offset) =>
-    bridge.sessions.list({ limit: SESSION_PAGE_SIZE, offset, profile: profileScopeRef.current, ...SESSION_LIST_FILTER });
+    bridge.sessions.list({ limit: SESSION_PAGE_SIZE, offset, profile: profileScopeRef.current, ...sourceFilterRef.current });
 
   const refresh = useCallback(async () => {
     let rows = null;
@@ -522,7 +528,7 @@ export function useHermes() {
     refresh();
     const timer = setInterval(refresh, REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [isReady, connectionId, profileScope, refresh]);
+  }, [isReady, connectionId, profileScope, sourceKey, refresh]);
 
   const defaultProfile = profiles.find((p) => p.is_default)?.name ?? profiles[0]?.name ?? null;
   const profileNames = profiles.map((p) => p.name);
@@ -552,6 +558,17 @@ export function useHermes() {
     },
     [connectionId],
   );
+
+  // Un-settling also restarts the auto-settle clock, so an old thread stays out once brought back.
+  const settleThreads = (keys, settled) =>
+    Promise.all(
+      keys.map((key) => {
+        const thread = threadsRef.current.find((t) => t.key === key);
+        if (!thread?.storedId) return null;
+        if (!settled) setAutoSettleKept([thread.storedId], true);
+        return thread.archived !== settled ? patchThread(key, { archived: settled }) : null;
+      }),
+    );
 
   const resetThreads = useCallback(() => {
     const fresh = newThread({ profile: null });
@@ -862,7 +879,10 @@ export function useHermes() {
     setEffort,
     setFast,
     pinThread: (key, pinned) => patchThread(key, { pinned }),
-    settleThread: (key, settled) => patchThread(key, { archived: settled }),
+    // Settled in Hermes, or idle past the auto-settle setting (display only, nothing is written).
+    isSettled: (thread) => thread.archived || isAutoSettled(thread, autoSettleDays, autoSettleKept),
+    settleThread: (key, settled) => settleThreads([key], settled),
+    settleThreads,
     markUnread: (key) => patchThread(key, { unread: true }),
     // Each session carries its own revision fence, so bulk edits run in parallel.
     patchThreads: (keys, patch) => Promise.all(keys.map((key) => patchThread(key, patch))),
