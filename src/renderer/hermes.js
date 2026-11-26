@@ -3,6 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 const bridge = window.t3rmes;
 const EMPTY_CONNECTIONS = { active: null, state: 'idle', error: null, connections: [], importable: [] };
 const REFRESH_INTERVAL_MS = 10_000;
+// Newest sessions refetched on every refresh; older pages load on request.
+const SESSION_PAGE_SIZE = 100;
+// Cron runs are the newest rows on busy gateways and would bury conversations, as in Hermes Desktop's recents.
+const SESSION_LIST_FILTER = { excludeSources: ['cron'] };
+const PROFILE_SCOPE_KEY = (connectionId) => `t3rmes:profile-scope:${connectionId}`;
+const LAST_PROFILE_KEY = (connectionId) => `t3rmes:last-profile:${connectionId}`;
 const LIVE_BUSY = new Set(['working', 'starting', 'waiting']);
 
 function isSessionNotFound(error) {
@@ -12,6 +18,8 @@ function isSessionNotFound(error) {
     .replace(/^Error:\s*/i, '');
   return /^(?:4001\s*[:,-]?\s*)?session not found[.!]?$/i.test(message);
 }
+
+const profileParam = (profile) => (profile ? { profile } : {});
 
 let nextKey = 1;
 const newThread = (fields = {}) => ({
@@ -25,6 +33,8 @@ const newThread = (fields = {}) => ({
   runningSince: null,
   failed: false,
   liveStatus: null,
+  // The Hermes profile that owns the session; every call for this thread is scoped to it.
+  profile: null,
   pinned: false,
   archived: false,
   unread: false,
@@ -41,6 +51,7 @@ const newThread = (fields = {}) => ({
 function fromSessionRow(row) {
   return {
     storedId: row.id,
+    profile: row.profile || null,
     title: row.title?.trim() || null,
     preview: row.preview?.replace(/\s+/g, ' ').trim() || null,
     source: row.source || null,
@@ -343,6 +354,17 @@ export function useHermes() {
   const [connections, setConnections] = useState(EMPTY_CONNECTIONS);
   const [threads, setThreads] = useState(() => [newThread()]);
   const [activeKey, setActiveKey] = useState(threads[0].key);
+  // profiles.list rows for the active gateway, plus avatar data URLs by profile name.
+  const [profiles, setProfiles] = useState([]);
+  const [avatars, setAvatars] = useState({});
+  // null shows every profile; a name narrows the sidebar (and new threads) to that profile.
+  const [profileScope, setProfileScopeState] = useState(null);
+  const profileScopeRef = useRef(profileScope);
+  profileScopeRef.current = profileScope;
+  // How far down the session list has been paged, and how many rows the gateway has.
+  const [sessionPage, setSessionPage] = useState({ loaded: 0, total: null, loading: false });
+  const sessionPageRef = useRef(sessionPage);
+  sessionPageRef.current = sessionPage;
   // False against a runtime whose REST session API is unreachable: pin/settle hide.
   const [syncSupported, setSyncSupported] = useState(false);
   const threadsRef = useRef(threads);
@@ -355,23 +377,7 @@ export function useHermes() {
     setThreads((current) => current.map((t) => (t.key === key ? update(t) : t)));
   }, []);
 
-  const refresh = useCallback(async () => {
-    let rows = null;
-    try {
-      ({ sessions: rows = [] } = await bridge.sessions.list());
-      setSyncSupported(true);
-    } catch {
-      setSyncSupported(false);
-      try {
-        const { sessions = [] } = await bridge.request('session.list', { limit: 50 });
-        rows = sessions;
-      } catch {}
-    }
-    let live = null;
-    try {
-      const { sessions = [] } = await bridge.request('session.active_list', {});
-      live = new Map(sessions.map((s) => [s.session_key, s.status]));
-    } catch {}
+  const mergeRows = useCallback((rows, live) => {
     setThreads((current) => {
       const byStored = new Map((rows || []).map((row) => [row.id, row]));
       const merged = current.map((t) => {
@@ -393,6 +399,54 @@ export function useHermes() {
       return added.length || merged.some((t, i) => t !== current[i]) ? [...merged, ...added] : current;
     });
   }, []);
+
+  const listSessions = (offset) =>
+    bridge.sessions.list({ limit: SESSION_PAGE_SIZE, offset, profile: profileScopeRef.current, ...SESSION_LIST_FILTER });
+
+  const refresh = useCallback(async () => {
+    let rows = null;
+    try {
+      const result = await listSessions(0);
+      rows = result.sessions || [];
+      setSyncSupported(true);
+      setSessionPage((current) => ({
+        ...current,
+        loaded: Math.max(current.loaded, rows.length),
+        total: typeof result.total === 'number' ? result.total : current.total,
+      }));
+    } catch {
+      setSyncSupported(false);
+      try {
+        const { sessions = [] } = await bridge.request('session.list', { limit: 50 });
+        rows = sessions;
+      } catch {}
+    }
+    let live = null;
+    try {
+      const { sessions = [] } = await bridge.request('session.active_list', {});
+      live = new Map(sessions.map((s) => [s.session_key, s.status]));
+    } catch {}
+    mergeRows(rows, live);
+  }, [mergeRows]);
+
+  // The next page of older sessions, behind the ones already loaded.
+  const loadMoreThreads = useCallback(async () => {
+    const page = sessionPageRef.current;
+    if (page.loading || (page.total !== null && page.loaded >= page.total)) return;
+    setSessionPage((current) => ({ ...current, loading: true }));
+    try {
+      const result = await listSessions(page.loaded);
+      const rows = result.sessions || [];
+      mergeRows(rows, null);
+      setSessionPage((current) => ({
+        loading: false,
+        loaded: current.loaded + rows.length,
+        total: rows.length < SESSION_PAGE_SIZE ? current.loaded + rows.length : result.total ?? current.total,
+      }));
+    } catch {
+      setSessionPage((current) => ({ ...current, loading: false }));
+    }
+  }, [mergeRows]);
 
   useEffect(() => {
     if (!bridge) return;
@@ -423,15 +477,84 @@ export function useHermes() {
   }, [refresh]);
 
   const isReady = connections.state === 'ready';
+  const connectionId = connections.active;
+
+  // Each gateway remembers its own profile filter.
+  useEffect(() => {
+    setProfiles([]);
+    setAvatars({});
+    setProfileScopeState(connectionId ? localStorage.getItem(PROFILE_SCOPE_KEY(connectionId)) || null : null);
+  }, [connectionId]);
+
   useEffect(() => {
     if (!isReady) return;
+    let cancelled = false;
+    bridge
+      .request('profiles.list', {})
+      .then(async ({ profiles: rows = [] }) => {
+        if (cancelled) return;
+        setProfiles(rows);
+        // A filter on a profile the gateway no longer has would hide everything.
+        setProfileScopeState((scope) => (scope && !rows.some((p) => p.name === scope) ? null : scope));
+        const entries = await Promise.all(
+          rows
+            .filter((p) => p.has_avatar)
+            .map((p) =>
+              bridge
+                .request('profiles.get_asset', { name: p.name, asset: 'avatar' })
+                .then((asset) => [p.name, asset?.found ? asset.data : null])
+                .catch(() => [p.name, null]),
+            ),
+        );
+        if (!cancelled) setAvatars(Object.fromEntries(entries.filter(([, data]) => data)));
+      })
+      .catch(() => {
+        if (!cancelled) setProfiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isReady, connectionId]);
+
+  useEffect(() => {
+    if (!isReady) return;
+    setSessionPage({ loaded: 0, total: null, loading: false });
     refresh();
     const timer = setInterval(refresh, REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [isReady, connections.active, refresh]);
+  }, [isReady, connectionId, profileScope, refresh]);
+
+  const defaultProfile = profiles.find((p) => p.is_default)?.name ?? profiles[0]?.name ?? null;
+  const profileNames = profiles.map((p) => p.name);
+  // Where a new thread starts: the filtered profile, else the last one used on this gateway.
+  const newThreadProfile = () => {
+    if (profileScopeRef.current) return profileScopeRef.current;
+    const last = connectionId ? localStorage.getItem(LAST_PROFILE_KEY(connectionId)) : null;
+    return last && profileNames.includes(last) ? last : defaultProfile;
+  };
+  const newThreadProfileRef = useRef(newThreadProfile);
+  newThreadProfileRef.current = newThreadProfile;
+
+  const setProfileScope = useCallback(
+    (name) => {
+      const scope = name || null;
+      if (connectionId) {
+        if (scope) localStorage.setItem(PROFILE_SCOPE_KEY(connectionId), scope);
+        else localStorage.removeItem(PROFILE_SCOPE_KEY(connectionId));
+      }
+      setProfileScopeState(scope);
+      // An empty draft follows the filter, so New lands in the profile being looked at.
+      if (scope) {
+        setThreads((current) =>
+          current.map((t) => (t.key === activeKeyRef.current && !t.storedId && t.messages.length === 0 ? { ...t, profile: scope } : t)),
+        );
+      }
+    },
+    [connectionId],
+  );
 
   const resetThreads = useCallback(() => {
-    const fresh = newThread();
+    const fresh = newThread({ profile: null });
     setThreads([fresh]);
     setActiveKey(fresh.key);
   }, []);
@@ -455,7 +578,7 @@ export function useHermes() {
       const previous = Object.fromEntries(Object.keys(patch).map((field) => [field, thread[field]]));
       updateThread(key, (t) => ({ ...t, ...patch }));
       try {
-        await bridge.sessions.update(thread.storedId, patch);
+        await bridge.sessions.update(thread.storedId, patch, thread.profile);
       } catch {
         updateThread(key, (t) => ({ ...t, ...previous }));
       }
@@ -484,8 +607,8 @@ export function useHermes() {
       updateThread(key, (t) => ({ ...t, loading: true }));
       try {
         const [result, stored] = await Promise.all([
-          bridge.request('session.resume', { session_id: thread.storedId }),
-          bridge.sessions.messages(thread.storedId).catch(() => null),
+          bridge.request('session.resume', { session_id: thread.storedId, ...profileParam(thread.profile) }),
+          bridge.sessions.messages(thread.storedId, thread.profile).catch(() => null),
         ]);
         updateThread(key, (t) => ({
           ...t,
@@ -504,10 +627,21 @@ export function useHermes() {
   );
 
   const createThread = useCallback(() => {
-    const fresh = newThread();
+    const fresh = newThread({ profile: newThreadProfileRef.current() });
     setThreads((current) => [fresh, ...current]);
     setActiveKey(fresh.key);
   }, []);
+
+  // A draft can still move to another profile; a session cannot.
+  const setThreadProfile = useCallback(
+    (name) => {
+      const thread = threadsRef.current.find((t) => t.key === activeKeyRef.current);
+      if (!thread || thread.sessionId || thread.storedId) return;
+      if (connectionId) localStorage.setItem(LAST_PROFILE_KEY(connectionId), name);
+      updateThread(thread.key, (t) => ({ ...t, profile: name, pending: {} }));
+    },
+    [connectionId, updateThread],
+  );
 
   // The runtime-wide model catalog and defaults; a session's own pick overrides them.
   const [modelOptions, setModelOptions] = useState({ providers: [], loading: false });
@@ -516,19 +650,28 @@ export function useHermes() {
     const thread = threadsRef.current.find((t) => t.key === activeKeyRef.current);
     setModelOptions((current) => ({ ...current, loading: true }));
     try {
-      const result = await bridge.request('model.options', thread?.sessionId ? { session_id: thread.sessionId } : {});
+      const result = await bridge.request(
+        'model.options',
+        thread?.sessionId ? { session_id: thread.sessionId } : profileParam(thread?.profile),
+      );
       setModelOptions({ providers: result?.providers || [], loading: false });
       setDefaults((current) => ({ ...current, model: result?.model || current.model, provider: result?.provider || current.provider }));
     } catch {
       setModelOptions((current) => ({ ...current, loading: false }));
     }
   }, []);
+  // Model catalogs and defaults are per profile, so they reload when the open thread's profile changes.
+  const activeProfile = (threads.find((t) => t.key === activeKey) ?? threads[0])?.profile ?? null;
   useEffect(() => {
     if (!isReady) return;
     setModelOptions({ providers: [], loading: false });
     setDefaults({});
     refreshModels();
-    Promise.allSettled([bridge.request('config.get', { key: 'reasoning' }), bridge.request('config.get', { key: 'fast' })]).then(
+    const scoped = profileParam(activeProfile);
+    Promise.allSettled([
+      bridge.request('config.get', { key: 'reasoning', ...scoped }),
+      bridge.request('config.get', { key: 'fast', ...scoped }),
+    ]).then(
       ([reasoning, fast]) =>
         setDefaults((current) => ({
           ...current,
@@ -536,7 +679,7 @@ export function useHermes() {
           fast: fast.value?.value === 'fast',
         })),
     );
-  }, [isReady, connections.active, refreshModels]);
+  }, [isReady, connectionId, activeProfile, refreshModels]);
 
   const pushError = useCallback(
     (key, message) => updateThread(key, (t) => ({ ...t, messages: [...t.messages, { role: 'error', text: message }] })),
@@ -545,7 +688,8 @@ export function useHermes() {
 
   const resumeThread = useCallback(
     async (key, storedId) => {
-      const result = await bridge.request('session.resume', { session_id: storedId });
+      const profile = threadsRef.current.find((t) => t.key === key)?.profile;
+      const result = await bridge.request('session.resume', { session_id: storedId, ...profileParam(profile) });
       if (!result?.session_id) throw new Error('Hermes did not return a runtime session ID.');
       updateThread(key, (t) => ({
         ...t,
@@ -628,7 +772,10 @@ export function useHermes() {
         let sessionId = thread.sessionId;
         if (!sessionId) {
           const { model, provider, effort, fast } = thread.pending;
+          const profile = thread.profile || newThreadProfileRef.current();
+          if (profile && connectionId) localStorage.setItem(LAST_PROFILE_KEY(connectionId), profile);
           const created = await bridge.request('session.create', {
+            ...profileParam(profile),
             ...(model ? { model, provider } : {}),
             ...(effort ? { reasoning_effort: effort } : {}),
             ...(typeof fast === 'boolean' ? { fast } : {}),
@@ -641,6 +788,7 @@ export function useHermes() {
               ...info,
               runtime: { ...info.runtime, ...t.pending },
               pending: {},
+              profile,
               sessionId,
               storedId: created.stored_session_id || t.storedId,
               model: t.model || created.info?.model || null,
@@ -674,7 +822,7 @@ export function useHermes() {
         updateThread(key, (t) => applyEvent(t, 'error', { message: error.message }));
       }
     },
-    [activeKey, updateThread, patchThread, resumeThread],
+    [activeKey, connectionId, updateThread, patchThread, resumeThread],
   );
 
   const stop = useCallback(async () => {
@@ -693,6 +841,16 @@ export function useHermes() {
     threads,
     activeThread,
     syncSupported,
+    profiles,
+    avatars,
+    defaultProfile,
+    profileScope,
+    setProfileScope,
+    setThreadProfile,
+    // The profile a draft without its own pick will start in.
+    nextProfile: newThreadProfile(),
+    sessionPage,
+    loadMoreThreads,
     selectThread,
     createThread,
     send,

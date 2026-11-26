@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client';
 import {
   CheckIcon,
+  ChevronDownIcon,
+  UsersIcon,
   ChevronsUpDownIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -394,6 +396,8 @@ const cleanSearchSnippet = (snippet) => (snippet || '').replace(/>>>|<<</g, '').
 
 function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) {
   const { threads, syncSupported } = hermes;
+  const { profileScope: profileFilter, profiles, avatars, sessionPage } = hermes;
+  const showProfiles = profiles.length > 1;
   const [settledExpanded, toggleSettled] = useShelfExpanded(SETTLED_SHELF_STORAGE_KEY);
   const [workingExpanded, toggleWorking] = useShelfExpanded(WORKING_SHELF_STORAGE_KEY);
   const [selection, setSelection] = useState(EMPTY_SELECTION);
@@ -432,7 +436,7 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
     let cancelled = false;
     const id = window.setTimeout(async () => {
       try {
-        const { results = [] } = await window.t3rmes.sessions.search(trimmedQuery);
+        const { results = [] } = await window.t3rmes.sessions.search(trimmedQuery, profileFilter);
         if (!cancelled) setServerSearch({ query: trimmedQuery, results });
       } catch {
         if (!cancelled) setServerSearch({ query: trimmedQuery, results: [] });
@@ -442,10 +446,12 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
       cancelled = true;
       window.clearTimeout(id);
     };
-  }, [isSearching, trimmedQuery]);
+  }, [isSearching, trimmedQuery, profileFilter]);
 
   // Unsent new threads only show while they are open, like T3 drafts.
-  const allVisible = threads.filter((t) => t.storedId || t.messages.length > 0 || t.key === activeKey);
+  const allVisible = threads.filter(
+    (t) => (t.storedId || t.messages.length > 0 || t.key === activeKey) && (!profileFilter || t.profile === profileFilter || t.key === activeKey),
+  );
   const projects = [...new Set(allVisible.map(projectLabel).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const scope = projectScope.filter((key) => projects.includes(key));
   const visible = scope.length === 0 ? allVisible : allVisible.filter((t) => scope.includes(projectLabel(t)) || t.key === activeKey);
@@ -641,6 +647,8 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
       isSelected={selection.keys.has(thread.key)}
       jumpLabel={jumpLabelByKey.get(thread.key) ?? null}
       syncSupported={syncSupported && Boolean(thread.storedId)}
+      profile={showProfiles && !profileFilter ? thread.profile : null}
+      avatar={avatars[thread.profile]}
       onSelect={(event) => handleRowClick(event, thread)}
       onContextMenu={(event) => openContextMenu(event, thread)}
       onPin={(value) => hermes.pinThread(thread.key, value)}
@@ -653,8 +661,9 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
       className="min-h-full overflow-x-hidden"
       fixedHeader={
         <SidebarGroup className="z-[1] gap-1 pt-0">
-          <div className="flex items-center">
+          <div className="flex items-center gap-1">
             <ConnectionSwitcher hermes={hermes} onManage={onManageConnections} />
+            {showProfiles && <ProfileScopeFilter hermes={hermes} />}
           </div>
           <SidebarThreadHeader
             searchInputRef={searchInputRef}
@@ -719,6 +728,18 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
             />
           )}
           {renderedSettled.map((thread) => row(thread, 'slim'))}
+          {sessionPage.total !== null && sessionPage.loaded < sessionPage.total && (
+            <li className="list-none">
+              <button
+                type="button"
+                onClick={hermes.loadMoreThreads}
+                disabled={sessionPage.loading}
+                className="flex h-8 w-full cursor-pointer items-center justify-center rounded-md text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground disabled:cursor-default"
+              >
+                {sessionPage.loading ? 'Loading…' : 'Load older threads'}
+              </button>
+            </li>
+          )}
         </ul>
         </TooltipProvider>
       </SidebarGroup>
@@ -799,6 +820,136 @@ function SidebarThreadHeader({
         </SidebarHeaderIconButton>
       </div>
     </div>
+  );
+}
+
+// A Hermes profile's avatar, or its initial on a tinted square when it has none.
+const PROFILE_TINTS = ['bg-violet-500/20 text-violet-600 dark:text-violet-300', 'bg-sky-500/20 text-sky-600 dark:text-sky-300', 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300', 'bg-amber-500/20 text-amber-700 dark:text-amber-300', 'bg-rose-500/20 text-rose-600 dark:text-rose-300'];
+function ProfileAvatar({ name, src, className }) {
+  if (src) return <img src={src} alt="" aria-hidden="true" className={cn('size-4 shrink-0 rounded-full object-cover', className)} />;
+  const tint = PROFILE_TINTS[[...(name || '?')].reduce((sum, c) => sum + c.charCodeAt(0), 0) % PROFILE_TINTS.length];
+  return (
+    <span aria-hidden="true" className={cn('flex size-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold leading-none', tint, className)}>
+      {(name || '?')[0].toUpperCase()}
+    </span>
+  );
+}
+
+const profileTitle = (profile) => profile?.display_name?.trim() || profile?.name || '';
+
+// Narrows the sidebar to one Hermes profile; New then starts there. Remembered per gateway.
+function ProfileScopeFilter({ hermes }) {
+  const { profiles, avatars, profileScope, setProfileScope } = hermes;
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const items = [{ value: null, label: 'All profiles' }, ...profiles.map((p) => ({ value: p.name, label: profileTitle(p), description: p.description }))];
+  const folded = query.trim().toLowerCase();
+  const filteredItems = folded ? items.filter((item) => item.label.toLowerCase().includes(folded)) : items;
+  const selectedItem = items.find((item) => item.value === profileScope) ?? items[0];
+  return (
+    <Combobox
+      items={items}
+      filteredItems={filteredItems}
+      autoHighlight
+      itemToStringLabel={(item) => item.label}
+      isItemEqualToValue={(a, b) => a.value === b.value}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery('');
+      }}
+      value={selectedItem}
+      onValueChange={(item) => item && setProfileScope(item.value)}
+    >
+      <ComboboxTrigger
+        render={
+          <SidebarMenuButton
+            aria-label="Filter threads by profile"
+            className="h-8 min-w-0 flex-1 px-2 text-sidebar-muted-foreground hover:text-sidebar-foreground data-[popup-open]:text-sidebar-foreground"
+          />
+        }
+      >
+        {profileScope ? <ProfileAvatar name={profileScope} src={avatars[profileScope]} /> : <UsersIcon />}
+        <span className="min-w-0 flex-1 truncate">{selectedItem.label}</span>
+        <ChevronsUpDownIcon className="text-muted-foreground" />
+      </ComboboxTrigger>
+      <ComboboxPopup
+        align="start"
+        collisionAvoidance={{ side: 'flip', align: 'shift' }}
+        className="w-[min(18rem,var(--available-width))] overflow-hidden"
+        finalFocus={(closeType) => closeType === 'keyboard'}
+      >
+        {profiles.length > 6 && (
+          <ComboboxSearchInput aria-label="Search profiles" placeholder="Search profiles..." value={query} onChange={(event) => setQuery(event.target.value)} />
+        )}
+        <ComboboxEmpty>No matching profiles.</ComboboxEmpty>
+        <ComboboxList>
+          {(item) => (
+            <ComboboxItem key={item.value ?? 'all'} hideIndicator value={item} aria-selected={item.value === profileScope}>
+              <ProjectScopeRowIcon isSelected={item.value === profileScope}>
+                {item.value ? <ProfileAvatar name={item.value} src={avatars[item.value]} className="size-5" /> : <UsersIcon className="size-4 shrink-0" />}
+              </ProjectScopeRowIcon>
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-sm">{item.label}</span>
+                {item.description ? <span className="truncate text-xs text-muted-foreground">{item.description}</span> : null}
+              </span>
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxPopup>
+    </Combobox>
+  );
+}
+
+// The composer's profile chip: pick where a new thread starts; a thread with a session only shows it.
+function ComposerProfilePicker({ hermes, thread, disabled }) {
+  const { profiles, avatars } = hermes;
+  const current = thread.profile ?? hermes.nextProfile;
+  const locked = Boolean(thread.storedId || thread.sessionId);
+  const profile = profiles.find((p) => p.name === current);
+  const chip = (
+    <>
+      <ProfileAvatar name={current} src={avatars[current]} />
+      <span className="max-w-32 truncate">{profileTitle(profile) || current}</span>
+    </>
+  );
+  const chipClass =
+    'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-(--control-radius) px-2 text-sm font-medium text-foreground/80';
+  if (locked) {
+    return (
+      <Tooltip>
+        <TooltipTrigger render={<span className={chipClass} />}>{chip}</TooltipTrigger>
+        <TooltipPopup side="top">This thread runs in the {profileTitle(profile) || current} profile</TooltipPopup>
+      </Tooltip>
+    );
+  }
+  return (
+    <Menu>
+      <MenuTrigger
+        disabled={disabled}
+        aria-label="Profile for this thread"
+        render={<button type="button" className={cn(chipClass, 'cursor-pointer hover:bg-accent hover:text-foreground data-popup-open:bg-accent disabled:opacity-64')} />}
+      >
+        {chip}
+        <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+      </MenuTrigger>
+      <MenuPopup side="top" align="end" className="min-w-56">
+        <MenuGroup>
+          <MenuGroupLabel>Start this thread in</MenuGroupLabel>
+          <MenuRadioGroup value={current} onValueChange={(name) => hermes.setThreadProfile(name)}>
+            {profiles.map((p) => (
+              <MenuRadioItem key={p.name} value={p.name}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <ProfileAvatar name={p.name} src={avatars[p.name]} />
+                  <span className="truncate">{profileTitle(p)}</span>
+                  {p.model ? <span className="ml-auto truncate pl-3 text-xs text-muted-foreground">{modelLabel(p.model)}</span> : null}
+                </span>
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </MenuGroup>
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -977,15 +1128,15 @@ function JumpHintBadge({ label }) {
   );
 }
 
-function SidebarThreadRow({ thread, variant, isActive, isSelected, jumpLabel, syncSupported, onSelect, onContextMenu, onPin, onSettle }) {
+function SidebarThreadRow({ thread, variant, isActive, isSelected, jumpLabel, syncSupported, profile, avatar, onSelect, onContextMenu, onPin, onSettle }) {
   const status = threadStatus(thread);
   const topStatus = status ? STATUS_PRESENTATION[status] : null;
   const isUnread = status === 'unread';
   // Sidebar.logic shouldRecedeSidebarThread: read idle threads and background work recede;
   // the open, selected, waiting, failed and unread ones stay at full strength.
   const shouldRecede = !isActive && !isSelected && (status === null || status === 'working');
-  // Placeholder until Hermes profiles are wired: every card shows the default profile.
-  const project = 'default';
+  // The owning profile, while the list mixes profiles.
+  const project = profile;
   const model = modelLabel(thread.model);
   const stop = (fn) => (event) => {
     event.stopPropagation();
@@ -1109,7 +1260,10 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, jumpLabel, sy
             {/* T3: left of the status slot, so hover's wider row controls don't slide it. */}
             {pinIndicator}
             {project ? (
-              <span className="min-w-0 flex-1 truncate font-normal text-secondary-label text-xs">{project}</span>
+              <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 font-normal text-secondary-label text-xs">
+                <ProfileAvatar name={project} src={avatar} className="size-3.5" />
+                <span className="truncate">{project}</span>
+              </span>
             ) : (
               <span className="flex-1" />
             )}
@@ -1265,6 +1419,8 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
       onSubmit={submit}
       onStop={onStop}
       modelPicker={
+        <>
+        {picker.profiles.length > 1 && <ComposerProfilePicker hermes={picker} thread={thread} disabled={!connected} />}
         <ProviderModelPicker
           selection={selection}
           loading={picker.modelOptions.loading}
@@ -1274,6 +1430,7 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
           onEffort={picker.setEffort}
           onFast={picker.setFast}
         />
+        </>
       }
       context={thread.branch ? <ComposerContext branch={thread.branch} /> : null}
     />

@@ -499,17 +499,19 @@ function createHermesService({ getWindow }) {
     },
     // Session edits are revision-fenced: send the row's runtime_revision with a
     // fresh request id, and retry once against the current revision if it moved.
-    async updateSession(id, patch) {
+    async updateSession(id, patch, profile) {
       const pathname = `/api/sessions/${encodeURIComponent(id)}`;
+      const scope = profile ? `?profile=${encodeURIComponent(profile)}` : '';
       for (let attempt = 0; ; attempt++) {
-        const snapshot = await this.rest('GET', `${pathname}/mutation-snapshot`).catch((error) => {
+        const snapshot = await this.rest('GET', `${pathname}/mutation-snapshot${scope}`).catch((error) => {
           // Older runtimes have no fence and no snapshot route; a plain PATCH works there.
           if (error.status === 404 || error.status === 405) return null;
           throw error;
         });
+        const scoped = profile ? { ...patch, profile } : patch;
         const body = snapshot
-          ? { ...patch, request_id: crypto.randomUUID(), expected_revision: snapshot.runtime_revision ?? 0 }
-          : patch;
+          ? { ...scoped, request_id: crypto.randomUUID(), expected_revision: snapshot.runtime_revision ?? 0 }
+          : scoped;
         try {
           return await this.rest('PATCH', pathname, body);
         } catch (error) {

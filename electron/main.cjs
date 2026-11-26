@@ -42,6 +42,7 @@ function createWindow() {
   else mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
 }
 
+const profileQuery = (profile, sep) => (profile ? `${sep}profile=${encodeURIComponent(profile)}` : '');
 ipcMain.handle('hermes:connections:list', () => hermes.list());
 ipcMain.handle('hermes:connections:select', (_event, id) => hermes.select(id));
 ipcMain.handle('hermes:connections:add', (_event, input) => hermes.add(input));
@@ -51,16 +52,21 @@ ipcMain.handle('hermes:connections:remove', (_event, id) => hermes.remove(id));
 ipcMain.handle('hermes:connections:sign-in', (_event, id) => hermes.signIn(id));
 ipcMain.handle('hermes:connections:sign-out', (_event, id) => hermes.signOut(id));
 ipcMain.handle('hermes:request', (_event, method, params) => hermes.request(method, params));
-ipcMain.handle('hermes:sessions:list', () =>
-  hermes.rest('GET', '/api/sessions?limit=100&order=recent&archived=include'),
+// Every profile's sessions in one recency-ordered list, each row tagged with its `profile`.
+ipcMain.handle('hermes:sessions:list', (_event, { limit = 100, offset = 0, profile = null, excludeSources = [] } = {}) => {
+  const exclude = excludeSources.length ? `&exclude_sources=${encodeURIComponent(excludeSources.join(','))}` : '';
+  return hermes.rest(
+    'GET',
+    `/api/profiles/sessions?limit=${limit}&offset=${offset}&order=recent&archived=include&profile=${encodeURIComponent(profile || 'all')}${exclude}`,
+  );
+});
+ipcMain.handle('hermes:sessions:search', (_event, query, profile) =>
+  hermes.rest('GET', `/api/sessions/search?q=${encodeURIComponent(query)}&limit=20${profileQuery(profile, '&')}`),
 );
-ipcMain.handle('hermes:sessions:search', (_event, query) =>
-  hermes.rest('GET', `/api/sessions/search?q=${encodeURIComponent(query)}&limit=20`),
-);
-ipcMain.handle('hermes:sessions:update', (_event, id, patch) => hermes.updateSession(id, patch));
+ipcMain.handle('hermes:sessions:update', (_event, id, patch, profile) => hermes.updateSession(id, patch, profile));
 // Stored rows keep display-only timeline markers (model switches) that session.resume drops.
-ipcMain.handle('hermes:sessions:messages', (_event, id) =>
-  hermes.rest('GET', `/api/sessions/${encodeURIComponent(id)}/messages?order=latest&limit=500&inline_images=false`),
+ipcMain.handle('hermes:sessions:messages', (_event, id, profile) =>
+  hermes.rest('GET', `/api/sessions/${encodeURIComponent(id)}/messages?order=latest&limit=500&inline_images=false${profileQuery(profile, '&')}`),
 );
 // Runtime-side files (e.g. a turn's `@image:` upload) as a data URL, like Hermes Desktop's remote fs.
 ipcMain.handle('hermes:fs:read-data-url', async (_event, filePath, sessionId) => {
