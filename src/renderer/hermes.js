@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const bridge = window.t3rmes;
-const EMPTY_CONNECTIONS = { active: 'local', state: 'idle', error: null, connections: [], importable: [] };
+const EMPTY_CONNECTIONS = { active: null, state: 'idle', error: null, connections: [], importable: [] };
 const REFRESH_INTERVAL_MS = 10_000;
 const LIVE_BUSY = new Set(['working', 'starting', 'waiting']);
 

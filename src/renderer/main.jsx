@@ -13,7 +13,6 @@ import {
   Undo2Icon,
   LoaderCircleIcon,
   GlobeIcon,
-  MonitorIcon,
   PlusIcon,
   Trash2Icon,
   WrenchIcon,
@@ -115,7 +114,6 @@ const SETTINGS_SECTIONS = [
 
 const STATE_LABELS = {
   idle: 'Disconnected',
-  starting: 'Starting Hermes…',
   connecting: 'Connecting…',
   ready: 'Connected',
   'signed-out': 'Signed out',
@@ -124,7 +122,7 @@ const STATE_LABELS = {
 
 function stateTone(state) {
   if (state === 'ready') return 'bg-success';
-  if (state === 'connecting' || state === 'starting') return 'bg-warning animate-pulse';
+  if (state === 'connecting') return 'bg-warning animate-pulse';
   return 'bg-destructive';
 }
 
@@ -230,6 +228,7 @@ function App() {
           connectionState={connections.state}
           connectionError={connections.error}
           onSignIn={() => hermes.signIn(connections.active).catch(() => {})}
+          onAddGateway={openConnections}
           onSend={hermes.send}
           onStop={hermes.stop}
           picker={hermes}
@@ -285,19 +284,19 @@ function ConnectionSwitcher({ hermes, onManage }) {
           <SidebarMenuButton className="h-8 min-w-0 flex-1 px-2 text-sidebar-muted-foreground hover:text-sidebar-foreground data-[popup-open]:text-sidebar-foreground" />
         }
       >
-        {active?.kind === 'local' ? <MonitorIcon /> : <GlobeIcon />}
-        <span className="min-w-0 flex-1 truncate">{active?.label ?? 'Hermes'}</span>
+        <GlobeIcon />
+        <span className="min-w-0 flex-1 truncate">{active?.label ?? 'Add a gateway'}</span>
         <span className={cn('size-1.5 shrink-0 rounded-full', stateTone(connections.state))} />
         <ChevronsUpDownIcon className="text-muted-foreground" />
       </MenuTrigger>
       <MenuPopup side="bottom" align="start" className="w-(--anchor-width) min-w-56">
         <MenuGroup>
-          <MenuGroupLabel>Hermes runtime</MenuGroupLabel>
+          <MenuGroupLabel>Hermes gateway</MenuGroupLabel>
           <MenuRadioGroup value={connections.active} onValueChange={(id) => hermes.selectConnection(id)}>
             {connections.connections.map((connection) => (
               <MenuRadioItem key={connection.id} value={connection.id}>
                 <span className="flex min-w-0 items-center gap-2">
-                  {connection.kind === 'local' ? <MonitorIcon className="size-3.5 text-muted-foreground" /> : <GlobeIcon className="size-3.5 text-muted-foreground" />}
+                  <GlobeIcon className="size-3.5 text-muted-foreground" />
                   <span className="truncate">{connection.label}</span>
                 </span>
               </MenuRadioItem>
@@ -307,7 +306,7 @@ function ConnectionSwitcher({ hermes, onManage }) {
         <MenuSeparator />
         <MenuItem onClick={onManage}>
           <PlusIcon />
-          Add or manage runtimes…
+          Add or manage gateways…
         </MenuItem>
       </MenuPopup>
     </Menu>
@@ -1200,7 +1199,7 @@ function PageHeader({ children }) {
   );
 }
 
-function ChatView({ thread, connection, connectionState, connectionError, onSignIn, onSend, onStop, picker }) {
+function ChatView({ thread, connection, connectionState, connectionError, onSignIn, onAddGateway, onSend, onStop, picker }) {
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState([]);
   const scrollRef = useRef(null);
@@ -1279,9 +1278,10 @@ function ChatView({ thread, connection, connectionState, connectionError, onSign
       context={thread.branch ? <ComposerContext branch={thread.branch} /> : null}
     />
   );
-  const banner =
-    connectionState === 'signed-out' ? (
-      <ConnectionBanner text={`Sign in to ${connection?.label ?? 'this runtime'} to start chatting.`} action={<Button size="xs" onClick={onSignIn}>Sign in</Button>} />
+  const banner = !connection ? (
+    <ConnectionBanner text="Add a Hermes gateway to start chatting." action={<Button size="xs" onClick={onAddGateway}>Add gateway</Button>} />
+  ) : connectionState === 'signed-out' ? (
+      <ConnectionBanner text={`Sign in to ${connection.label} to start chatting.`} action={<Button size="xs" onClick={onSignIn}>Sign in</Button>} />
     ) : connectionState === 'error' && connectionError ? (
       <ConnectionBanner text={connectionError} />
     ) : null;
@@ -1457,8 +1457,8 @@ const SETTINGS_SEARCH_ITEMS = [
   { id: 'interface-font-size', title: 'Interface font size', section: 'appearance' },
   { id: 'send-shortcut', title: 'Send shortcut', section: 'chat' },
   { id: 'tool-call-visibility', title: 'Tool calls in chat', section: 'chat' },
-  { id: 'runtimes', title: 'Runtimes', section: 'connections' },
-  { id: 'add-remote-runtime', title: 'Add remote runtime', section: 'connections' },
+  { id: 'gateways', title: 'Gateways', section: 'connections' },
+  { id: 'add-gateway', title: 'Add gateway', section: 'connections' },
 ];
 
 // T3 SettingsSidebarNav.tsx: search, then the section list.
@@ -1729,7 +1729,10 @@ function ConnectionsSettings({ hermes }) {
 
   return (
     <>
-      <SettingsSection title="Runtimes">
+      <SettingsSection title="Gateways">
+        {connections.connections.length === 0 && !connections.importable?.length && (
+          <SettingsRow title="No gateways yet" description="Add a Hermes gateway below to start chatting." />
+        )}
         {connections.connections.map((connection) => {
           const isActive = connection.id === connections.active;
           const state = isActive ? connections.state : null;
@@ -1769,19 +1772,15 @@ function ConnectionsSettings({ hermes }) {
                   )}
                 </span>
               }
-              description={
-                connection.kind === 'local'
-                  ? 'Starts hermes serve on this computer.'
-                  : (isActive && connections.error && state !== 'ready' ? connections.error : connection.url)
-              }
+              description={isActive && connections.error && state !== 'ready' ? connections.error : connection.url}
               control={
                 <>
-                  {connection.kind === 'remote' && isActive && state === 'signed-out' && (
+                  {isActive && state === 'signed-out' && (
                     <Button size="sm" disabled={busyId === connection.id} onClick={() => run(connection.id, hermes.signIn)}>
                       Sign in
                     </Button>
                   )}
-                  {connection.kind === 'remote' && isActive && state === 'ready' && (
+                  {isActive && state === 'ready' && (
                     <Button size="sm" variant="ghost" onClick={() => run(connection.id, hermes.signOut)}>
                       Sign out
                     </Button>
@@ -1794,11 +1793,9 @@ function ConnectionsSettings({ hermes }) {
                   <Button size="icon-sm" variant="ghost" aria-label={`Edit ${connection.label}`} onClick={() => setEditing({ id: connection.id })}>
                     <PencilIcon />
                   </Button>
-                  {connection.kind === 'remote' && (
-                    <Button size="icon-sm" variant="ghost" aria-label={`Remove ${connection.label}`} onClick={() => run(connection.id, hermes.removeConnection)}>
-                      <Trash2Icon />
-                    </Button>
-                  )}
+                  <Button size="icon-sm" variant="ghost" aria-label={`Remove ${connection.label}`} onClick={() => run(connection.id, hermes.removeConnection)}>
+                    <Trash2Icon />
+                  </Button>
                 </>
               }
             />
@@ -1817,7 +1814,7 @@ function ConnectionsSettings({ hermes }) {
           />
         )}
       </SettingsSection>
-      <SettingsSection title="Add remote runtime">
+      <SettingsSection title="Add gateway">
         <form onSubmit={add} className="flex flex-col gap-2 px-3 py-3 sm:px-4">
           <p className="text-[13px] leading-[1.45] text-muted-foreground/80">
             Paste the URL of a Hermes gateway. You’ll be asked to sign in if it requires it.
@@ -1840,11 +1837,10 @@ function ConnectionsSettings({ hermes }) {
 function ConnectionEditor({ connection, busy, onSave, onCancel }) {
   const [label, setLabel] = useState(connection.label);
   const [url, setUrl] = useState(connection.url ?? '');
-  const remote = connection.kind === 'remote';
   const submit = (event) => {
     event.preventDefault();
-    if (!label.trim() || busy) return;
-    onSave(remote ? { label, url } : { label });
+    if (!label.trim() || !url.trim() || busy) return;
+    onSave({ label, url });
   };
   return (
     <form
@@ -1859,10 +1855,8 @@ function ConnectionEditor({ connection, busy, onSave, onCancel }) {
     >
       <div className="flex gap-2">
         <Input nativeInput autoFocus value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Name" aria-label="Name" className="w-44" />
-        {remote && (
-          <Input nativeInput value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://hermes.example.com" aria-label="URL" className="flex-1" />
-        )}
-        <Button type="submit" size="sm" disabled={busy || !label.trim() || (remote && !url.trim())}>
+        <Input nativeInput value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://hermes.example.com" aria-label="URL" className="flex-1" />
+        <Button type="submit" size="sm" disabled={busy || !label.trim() || !url.trim()}>
           {busy ? <Spinner className="size-3.5" /> : <CheckIcon />}
           Save
         </Button>
@@ -1870,7 +1864,7 @@ function ConnectionEditor({ connection, busy, onSave, onCancel }) {
           Cancel
         </Button>
       </div>
-      {remote && url.trim() !== connection.url && (
+      {url.trim() !== connection.url && (
         <p className="text-[13px] text-muted-foreground/80">Changing the URL signs you out of this gateway.</p>
       )}
     </form>

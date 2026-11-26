@@ -26,7 +26,7 @@ Speed is a product feature. Every new capability must justify its startup cost, 
 
 The first usable version contains only:
 
-1. One local Hermes connection.
+1. Remote Hermes gateways only, one connected at a time. t3rmes never starts Hermes itself.
 2. One chat transcript with streaming responses.
 3. A composer with send, stop, retry, and multiline input.
 4. Compact tool activity shown inline in the transcript.
@@ -40,18 +40,18 @@ Explicitly deferred: projects, profiles, cloud accounts, voice, cron, messaging,
 ```text
 Electron shell
   -> preload bridge
-  -> Hermes adapter (HTTP/WebSocket or local gateway)
+  -> Hermes adapter (HTTP/WebSocket to a remote gateway)
   -> normalized client events
   -> small React renderer
 ```
 
-The Electron shell owns windows, lifecycle, secure storage, process startup, and native capabilities. The Hermes adapter owns gateway discovery, authentication, reconnects, request cancellation, and translating Hermes events into a small client contract. React owns chat state and presentation only.
+The Electron shell owns windows, lifecycle, secure storage, and native capabilities. The Hermes adapter owns gateway discovery, authentication, reconnects, request cancellation, and translating Hermes events into a small client contract. React owns chat state and presentation only.
 
 The client should depend on Hermes's gateway contract rather than importing broad Hermes Desktop UI modules. This keeps the integration replaceable and lets us upgrade Hermes independently.
 
 ## Sensible defaults
 
-- Local Hermes runtime when available; otherwise show a single connection action.
+- The last-used remote gateway; with none saved, show a single "Add gateway" action.
 - The current working directory as the initial workspace.
 - The Hermes default model unless the user chooses one.
 - Dark/light appearance follows the operating system.
@@ -70,8 +70,8 @@ Use T3's `apps/desktop` and `packages/client-runtime` for shell/runtime patterns
 ## Development sequence
 
 1. Establish the Electron/Vite shell and a fast empty chat window.
-2. Add a Hermes adapter (main process) for local and remote gateways.
-3. Connect to a real local gateway and render one streaming turn.
+2. Add a Hermes adapter (main process) for remote gateways.
+3. Connect to a real remote gateway and render one streaming turn.
 4. Add cancellation, reconnect, persistence, and compact tool rows.
 5. Measure cold start, first paint, idle memory, and time-to-first-token before adding features.
 

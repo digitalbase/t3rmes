@@ -44,7 +44,7 @@ Verify visual changes with a screenshot, in both light and dark mode when colour
 
 ## Hermes
 
-- Never spawn plain `hermes`. Use `resolveHermesCommand()`.
+- t3rmes is a remote-only client. It never starts or bundles Hermes; every connection is a remote gateway URL with OAuth sign-in.
 - Session edits are revision-fenced. Take a mutation snapshot, then PATCH with `request_id` and `expected_revision`. Retry once on 409.
 - Bulk edits go through `hermes.patchThreads`.
 

@@ -1,16 +1,14 @@
-// Hermes adapter for the main process: connection registry, local runtime,
-// OAuth cookie sign-in and the JSON-RPC gateway socket. Mirrors Hermes
-// Desktop (apps/desktop/electron) but keeps only what a chat client needs.
+// Hermes adapter for the main process: remote gateway registry, OAuth cookie
+// sign-in and the JSON-RPC gateway socket. Mirrors Hermes Desktop
+// (apps/desktop/electron) but keeps only what a remote chat client needs.
 // REST and the socket live here because the gateway's CORS and WS Origin
 // checks reject renderer origins for remote hosts.
 const { app, BrowserWindow, net, session } = require('electron');
-const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const LOCAL_ID = 'local';
 const AT_COOKIES = ['__Host-hermes_session_at', '__Secure-hermes_session_at', 'hermes_session_at'];
 const RT_COOKIES = ['__Host-hermes_session_rt', '__Secure-hermes_session_rt', 'hermes_session_rt'];
 const CONNECT_TIMEOUT_MS = 15_000;
@@ -38,10 +36,10 @@ function importHermesDesktopRegistry() {
       .filter((c) => c && c.kind === 'remote' && c.url && c.authMode !== 'token')
       .map((c) => ({ id: c.id, kind: 'remote', label: c.label || c.url, url: normalizeBaseUrl(c.url), authMode: 'oauth' }));
     const ids = new Set(connections.map((c) => c.id));
-    const active = [source.lastUsed, source.primary].find((id) => ids.has(id)) || LOCAL_ID;
+    const active = [source.lastUsed, source.primary].find((id) => ids.has(id)) || connections[0]?.id || null;
     return { connections, active };
   } catch {
-    return { connections: [], active: LOCAL_ID };
+    return { connections: [], active: null };
   }
 }
 
@@ -63,17 +61,20 @@ function uniqueId(candidate, connections) {
   return id;
 }
 
+// t3rmes is remote-only; older registries carried a "This device" entry.
 function readRegistry() {
   try {
-    const registry = JSON.parse(fs.readFileSync(registryPath(), 'utf8'));
-    if (registry && registry.version === 1 && Array.isArray(registry.connections)) return registry;
+    const stored = JSON.parse(fs.readFileSync(registryPath(), 'utf8'));
+    if (stored && stored.version === 1 && Array.isArray(stored.connections)) {
+      const connections = stored.connections.filter((c) => c && c.kind === 'remote' && c.url);
+      const active = connections.some((c) => c.id === stored.active) ? stored.active : connections[0]?.id || null;
+      const registry = { version: 1, active, connections };
+      if (connections.length !== stored.connections.length || active !== stored.active) writeRegistry(registry);
+      return registry;
+    }
   } catch {}
   const imported = importHermesDesktopRegistry();
-  const registry = {
-    version: 1,
-    active: imported.active,
-    connections: [{ id: LOCAL_ID, kind: 'local', label: 'This device' }, ...imported.connections],
-  };
+  const registry = { version: 1, active: imported.active, connections: imported.connections };
   writeRegistry(registry);
   return registry;
 }
@@ -189,78 +190,6 @@ async function mintTicket(connection) {
   return body.ticket;
 }
 
-// ---------- local runtime ----------
-
-let localBackend = null;
-
-// Prefer a real local install over PATH: `hermes` on PATH may be a wrapper
-// that runs the agent somewhere else.
-function resolveHermesCommand() {
-  const candidates = [
-    process.env.T3RMES_HERMES_BIN,
-    path.join(os.homedir(), '.local', 'bin', 'hermes'),
-    path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes'),
-  ];
-  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || 'hermes';
-}
-
-async function waitForStatus(baseUrl) {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    try {
-      await requestJson(`${baseUrl}/api/status`, { timeoutMs: 2_000 });
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-  }
-  throw new Error('Hermes started but never answered /api/status.');
-}
-
-function startLocalBackend() {
-  if (localBackend) return localBackend.ready;
-  const token = crypto.randomBytes(32).toString('base64url');
-  const child = spawn(resolveHermesCommand(), ['serve', '--host', '127.0.0.1', '--port', '0'], {
-    env: { ...process.env, HERMES_DASHBOARD_SESSION_TOKEN: token, HERMES_DESKTOP: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const ready = new Promise((resolve, reject) => {
-    let output = '';
-    const timer = setTimeout(() => reject(new Error('Hermes did not start within 90 seconds.')), 90_000);
-    const onData = (chunk) => {
-      output = (output + chunk.toString()).slice(-8_000);
-      const match = output.match(/HERMES_(?:BACKEND|DASHBOARD)_READY port=(\d+)/);
-      if (match) {
-        clearTimeout(timer);
-        resolve({ baseUrl: `http://127.0.0.1:${match[1]}`, token });
-      }
-    };
-    child.stdout.on('data', onData);
-    child.stderr.on('data', onData);
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error.code === 'ENOENT' ? new Error('The hermes command was not found on PATH.') : error);
-    });
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      localBackend = null;
-      reject(new Error(`Hermes exited (code ${code}). ${output.trim().split('\n').slice(-2).join(' ')}`));
-    });
-  });
-  const healthy = ready.then(async (backend) => {
-    await waitForStatus(backend.baseUrl);
-    return backend;
-  });
-  localBackend = { child, ready: healthy };
-  healthy.catch(() => {});
-  return healthy;
-}
-
-function stopLocalBackend() {
-  localBackend?.child.kill('SIGTERM');
-  localBackend = null;
-}
-
 // ---------- gateway socket ----------
 
 class Gateway {
@@ -284,11 +213,6 @@ class Gateway {
 
   async wsUrl() {
     const { connection } = this;
-    if (connection.kind === 'local') {
-      this.setState('starting');
-      const { baseUrl, token } = await startLocalBackend();
-      return `${baseUrl.replace(/^http/, 'ws')}/api/ws?token=${encodeURIComponent(token)}`;
-    }
     const base = connection.url.replace(/^http/, 'ws');
     if (connection.authMode === 'token') return `${base}/api/ws?token=${encodeURIComponent(connection.token || '')}`;
     if (!(await hasSessionCookie(connection))) {
@@ -447,8 +371,17 @@ function createHermesService({ getWindow }) {
     if (!status || typeof status !== 'object') throw new Error('That URL is not a Hermes gateway.');
   }
 
+  // With no gateways saved there is nothing to connect to; the renderer asks for one.
   function activate(id) {
-    const connection = findConnection(id) || findConnection(LOCAL_ID);
+    const connection = findConnection(id) || registry.connections[0];
+    if (!connection) {
+      gateway?.close();
+      gateway = null;
+      registry.active = null;
+      writeRegistry(registry);
+      emit('state', { connectionId: null, state: 'idle', error: null });
+      return;
+    }
     if (gateway && gateway.connection.id === connection.id && !gateway.closed) {
       if (gateway.state !== 'ready') {
         gateway.state = 'idle';
@@ -457,7 +390,6 @@ function createHermesService({ getWindow }) {
       return;
     }
     gateway?.close();
-    if (connection.kind !== 'local') stopLocalBackend();
     registry.active = connection.id;
     writeRegistry(registry);
     gateway = new Gateway(connection, emit);
@@ -470,7 +402,6 @@ function createHermesService({ getWindow }) {
     },
     stop() {
       gateway?.close();
-      stopLocalBackend();
     },
     list: () => snapshot(),
     select(id) {
@@ -528,11 +459,10 @@ function createHermesService({ getWindow }) {
       return snapshot();
     },
     remove(id) {
-      if (id === LOCAL_ID) return snapshot();
       const connection = findConnection(id);
       registry.connections = registry.connections.filter((c) => c.id !== id);
       if (connection) oauthSession(connection).clearStorageData().catch(() => {});
-      if (registry.active === id) activate(LOCAL_ID);
+      if (registry.active === id) activate(registry.connections[0]?.id);
       else writeRegistry(registry);
       return snapshot();
     },
@@ -562,10 +492,6 @@ function createHermesService({ getWindow }) {
     async rest(method, pathname, body) {
       const connection = gateway?.connection;
       if (!connection) throw new Error('Not connected to Hermes.');
-      if (connection.kind === 'local') {
-        const { baseUrl, token } = await startLocalBackend();
-        return requestJson(`${baseUrl}${pathname}`, { method, body, headers: { 'X-Hermes-Session-Token': token } });
-      }
       if (connection.authMode === 'token') {
         return requestJson(`${connection.url}${pathname}`, { method, body, headers: { Authorization: `Bearer ${connection.token || ''}` } });
       }
