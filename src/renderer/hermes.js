@@ -406,8 +406,9 @@ export function useHermes() {
     });
   }, []);
 
+  // Sessions opened and left without a message stay out, as in Hermes Desktop's sidebar.
   const listSessions = (offset) =>
-    bridge.sessions.list({ limit: SESSION_PAGE_SIZE, offset, profile: profileScopeRef.current, ...sourceFilterRef.current });
+    bridge.sessions.list({ limit: SESSION_PAGE_SIZE, offset, profile: profileScopeRef.current, minMessages: 1, ...sourceFilterRef.current });
 
   const refresh = useCallback(async () => {
     let rows = null;

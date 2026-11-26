@@ -54,7 +54,7 @@ ipcMain.handle('hermes:connections:sign-in', (_event, id) => hermes.signIn(id));
 ipcMain.handle('hermes:connections:sign-out', (_event, id) => hermes.signOut(id));
 ipcMain.handle('hermes:request', (_event, method, params) => hermes.request(method, params));
 // Every profile's sessions in one recency-ordered list, each row tagged with its `profile`.
-ipcMain.handle('hermes:sessions:list', (_event, { limit = 100, offset = 0, profile = null, sources = null, excludeSources = [] } = {}) => {
+ipcMain.handle('hermes:sessions:list', (_event, { limit = 100, offset = 0, profile = null, sources = null, excludeSources = [], minMessages = 0 } = {}) => {
   // `sources` is an allow-list; `excludeSources` a deny-list. An empty allow-list matches nothing.
   const exclude = sources
     ? `&sources=${encodeURIComponent(sources.join(',') || 'none')}`
@@ -63,7 +63,7 @@ ipcMain.handle('hermes:sessions:list', (_event, { limit = 100, offset = 0, profi
       : '';
   return hermes.rest(
     'GET',
-    `/api/profiles/sessions?limit=${limit}&offset=${offset}&order=recent&archived=include&profile=${encodeURIComponent(profile || 'all')}${exclude}`,
+    `/api/profiles/sessions?limit=${limit}&offset=${offset}&min_messages=${minMessages}&order=recent&archived=include&profile=${encodeURIComponent(profile || 'all')}${exclude}`,
   );
 });
 ipcMain.handle('hermes:sessions:search', (_event, query, profile) =>
