@@ -1,6 +1,6 @@
 {
   "name": "t3rmes",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "main": "electron/main.cjs",
   "description": "A small, fast desktop client for Hermes Agent.",
