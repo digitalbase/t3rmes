@@ -179,7 +179,7 @@ function App() {
       <Sidebar
         side="left"
         collapsible="offcanvas"
-        className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+        data-app-sidebar=""
         resizable={{
           maxWidth: sidebarMaximumWidth,
           minWidth: THREAD_SIDEBAR_MIN_WIDTH,
