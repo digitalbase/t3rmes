@@ -29,6 +29,7 @@ function writeRegistry(registry) {
   fs.writeFileSync(registryPath(), JSON.stringify(registry, null, 2), { mode: 0o600 });
 }
 
+// Token connections are skipped: Hermes Desktop encrypts their tokens with its own key.
 function importHermesDesktopRegistry() {
   try {
     const file = path.join(os.homedir(), '.config', 'Hermes', 'connections.json');
@@ -42,6 +43,24 @@ function importHermesDesktopRegistry() {
   } catch {
     return { connections: [], active: LOCAL_ID };
   }
+}
+
+function labelKey(label) {
+  return String(label || '').trim().toLowerCase();
+}
+
+function uniqueLabel(candidate, connections, exceptId) {
+  const taken = new Set(connections.filter((c) => c.id !== exceptId).map((c) => labelKey(c.label)));
+  const base = String(candidate || '').trim().slice(0, 64) || 'Remote';
+  if (!taken.has(labelKey(base))) return base;
+  for (let n = 2; ; n++) if (!taken.has(labelKey(`${base} ${n}`))) return `${base} ${n}`;
+}
+
+function uniqueId(candidate, connections) {
+  const base = slug(candidate);
+  let id = base;
+  for (let n = 2; connections.some((c) => c.id === id); n++) id = `${base}-${n}`;
+  return id;
 }
 
 function readRegistry() {
@@ -401,13 +420,31 @@ function createHermesService({ getWindow }) {
 
   const findConnection = (id) => registry.connections.find((c) => c.id === id);
 
+  // The same gateway reached over http and https is still one gateway.
+  const sameGateway = (a, b) => a.replace(/^https?:/, '') === b.replace(/^https?:/, '');
+  const findByUrl = (url, exceptId) =>
+    registry.connections.find((c) => c.kind === 'remote' && c.id !== exceptId && sameGateway(c.url, url));
+
+  // Hermes Desktop gateways that are not in this registry yet.
+  function importable() {
+    return importHermesDesktopRegistry().connections.filter((c) => !findByUrl(c.url));
+  }
+
   function snapshot() {
     return {
       active: registry.active,
       state: gateway?.state || 'idle',
       error: gateway?.error || null,
       connections: registry.connections.map(({ token, ...c }) => c),
+      importable: importable().map(({ label, url }) => ({ label, url })),
     };
+  }
+
+  async function probe(baseUrl) {
+    const status = await requestJson(`${baseUrl}/api/status`, { timeoutMs: 8_000 }).catch((error) => {
+      throw new Error(`Could not reach ${new URL(baseUrl).host}: ${error.message}`);
+    });
+    if (!status || typeof status !== 'object') throw new Error('That URL is not a Hermes gateway.');
   }
 
   function activate(id) {
@@ -442,16 +479,52 @@ function createHermesService({ getWindow }) {
     },
     async add({ url, label }) {
       const baseUrl = normalizeBaseUrl(url);
-      const status = await requestJson(`${baseUrl}/api/status`, { timeoutMs: 8_000 }).catch((error) => {
-        throw new Error(`Could not reach ${new URL(baseUrl).host}: ${error.message}`);
-      });
-      if (!status || typeof status !== 'object') throw new Error('That URL is not a Hermes gateway.');
+      const existing = findByUrl(baseUrl);
+      if (existing) throw new Error(`${new URL(baseUrl).host} is already added as “${existing.label}”.`);
+      await probe(baseUrl);
       const host = new URL(baseUrl).host;
-      let id = slug(host);
-      while (findConnection(id)) id = `${slug(host)}-${crypto.randomBytes(2).toString('hex')}`;
-      registry.connections.push({ id, kind: 'remote', label: label?.trim() || host, url: baseUrl, authMode: 'oauth' });
+      const id = uniqueId(host, registry.connections);
+      registry.connections.push({ id, kind: 'remote', label: uniqueLabel(label || host, registry.connections), url: baseUrl, authMode: 'oauth' });
       writeRegistry(registry);
       activate(id);
+      return snapshot();
+    },
+    // Rename, or point at a new URL. A new URL drops the old sign-in.
+    async update(id, { label, url }) {
+      const connection = findConnection(id);
+      if (!connection) throw new Error('Unknown connection.');
+      let urlChanged = false;
+      if (url !== undefined && connection.kind === 'remote') {
+        const baseUrl = normalizeBaseUrl(url);
+        if (baseUrl !== connection.url) {
+          const existing = findByUrl(baseUrl, id);
+          if (existing) throw new Error(`${new URL(baseUrl).host} is already added as “${existing.label}”.`);
+          await probe(baseUrl);
+          await oauthSession(connection).clearStorageData().catch(() => {});
+          connection.url = baseUrl;
+          urlChanged = true;
+        }
+      }
+      if (label !== undefined && String(label).trim()) connection.label = uniqueLabel(label, registry.connections, id);
+      writeRegistry(registry);
+      if (urlChanged && gateway?.connection.id === id) {
+        gateway.close();
+        gateway = null;
+        activate(id);
+      } else if (gateway?.connection.id === id) {
+        gateway.connection = connection;
+      }
+      return snapshot();
+    },
+    importFromHermesDesktop() {
+      for (const c of importable()) {
+        registry.connections.push({
+          ...c,
+          id: uniqueId(c.id, registry.connections),
+          label: uniqueLabel(c.label, registry.connections),
+        });
+      }
+      writeRegistry(registry);
       return snapshot();
     },
     remove(id) {

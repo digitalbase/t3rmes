@@ -18,6 +18,8 @@ import {
   Trash2Icon,
   WrenchIcon,
   PaletteIcon,
+  PencilIcon,
+  DownloadIcon,
   SearchIcon,
   Settings2Icon,
   SettingsIcon,
@@ -1691,9 +1693,11 @@ function SettingsModal({ open, section, onSectionChange, onClose, hermes }) {
 function ConnectionsSettings({ hermes }) {
   const { connections } = hermes;
   const [url, setUrl] = useState('');
+  const [label, setLabel] = useState('');
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [editing, setEditing] = useState(null);
 
   async function add(event) {
     event.preventDefault();
@@ -1701,8 +1705,9 @@ function ConnectionsSettings({ hermes }) {
     setAdding(true);
     setError(null);
     try {
-      await hermes.addConnection({ url });
+      await hermes.addConnection({ url, label });
       setUrl('');
+      setLabel('');
     } catch (err) {
       setError(cleanError(err));
     } finally {
@@ -1728,6 +1733,28 @@ function ConnectionsSettings({ hermes }) {
         {connections.connections.map((connection) => {
           const isActive = connection.id === connections.active;
           const state = isActive ? connections.state : null;
+          if (editing?.id === connection.id) {
+            return (
+              <ConnectionEditor
+                key={connection.id}
+                connection={connection}
+                busy={busyId === connection.id}
+                onCancel={() => setEditing(null)}
+                onSave={async (input) => {
+                  setBusyId(connection.id);
+                  setError(null);
+                  try {
+                    await hermes.updateConnection(connection.id, input);
+                    setEditing(null);
+                  } catch (err) {
+                    setError(cleanError(err));
+                  } finally {
+                    setBusyId(null);
+                  }
+                }}
+              />
+            );
+          }
           return (
             <SettingsRow
               key={connection.id}
@@ -1764,6 +1791,9 @@ function ConnectionsSettings({ hermes }) {
                       Use
                     </Button>
                   )}
+                  <Button size="icon-sm" variant="ghost" aria-label={`Edit ${connection.label}`} onClick={() => setEditing({ id: connection.id })}>
+                    <PencilIcon />
+                  </Button>
                   {connection.kind === 'remote' && (
                     <Button size="icon-sm" variant="ghost" aria-label={`Remove ${connection.label}`} onClick={() => run(connection.id, hermes.removeConnection)}>
                       <Trash2Icon />
@@ -1774,6 +1804,18 @@ function ConnectionsSettings({ hermes }) {
             />
           );
         })}
+        {connections.importable?.length > 0 && (
+          <SettingsRow
+            title="Hermes Desktop gateways"
+            description={`Not added yet: ${connections.importable.map((c) => c.label).join(', ')}`}
+            control={
+              <Button size="sm" variant="outline" disabled={busyId === 'import'} onClick={() => run('import', hermes.importConnections)}>
+                <DownloadIcon />
+                Import {connections.importable.length}
+              </Button>
+            }
+          />
+        )}
       </SettingsSection>
       <SettingsSection title="Add remote runtime">
         <form onSubmit={add} className="flex flex-col gap-2 px-3 py-3 sm:px-4">
@@ -1782,6 +1824,7 @@ function ConnectionsSettings({ hermes }) {
           </p>
           <div className="flex gap-2">
             <Input nativeInput value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://hermes.example.com" className="flex-1" />
+            <Input nativeInput value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Name (optional)" className="w-44" />
             <Button type="submit" size="sm" disabled={adding || !url.trim()}>
               {adding ? <Spinner className="size-3.5" /> : <PlusIcon />}
               Add
@@ -1791,6 +1834,46 @@ function ConnectionsSettings({ hermes }) {
         </form>
       </SettingsSection>
     </>
+  );
+}
+
+function ConnectionEditor({ connection, busy, onSave, onCancel }) {
+  const [label, setLabel] = useState(connection.label);
+  const [url, setUrl] = useState(connection.url ?? '');
+  const remote = connection.kind === 'remote';
+  const submit = (event) => {
+    event.preventDefault();
+    if (!label.trim() || busy) return;
+    onSave(remote ? { label, url } : { label });
+  };
+  return (
+    <form
+      onSubmit={submit}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          onCancel();
+        }
+      }}
+      className="flex flex-col gap-2 px-3 py-3 sm:px-4"
+    >
+      <div className="flex gap-2">
+        <Input nativeInput autoFocus value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Name" aria-label="Name" className="w-44" />
+        {remote && (
+          <Input nativeInput value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://hermes.example.com" aria-label="URL" className="flex-1" />
+        )}
+        <Button type="submit" size="sm" disabled={busy || !label.trim() || (remote && !url.trim())}>
+          {busy ? <Spinner className="size-3.5" /> : <CheckIcon />}
+          Save
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+      {remote && url.trim() !== connection.url && (
+        <p className="text-[13px] text-muted-foreground/80">Changing the URL signs you out of this gateway.</p>
+      )}
+    </form>
   );
 }
 

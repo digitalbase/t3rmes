@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('t3rmes', {
     list: () => ipcRenderer.invoke('hermes:connections:list'),
     select: (id) => ipcRenderer.invoke('hermes:connections:select', id),
     add: (input) => ipcRenderer.invoke('hermes:connections:add', input),
+    update: (id, input) => ipcRenderer.invoke('hermes:connections:update', id, input),
+    importFromHermesDesktop: () => ipcRenderer.invoke('hermes:connections:import'),
     remove: (id) => ipcRenderer.invoke('hermes:connections:remove', id),
     signIn: (id) => ipcRenderer.invoke('hermes:connections:sign-in', id),
     signOut: (id) => ipcRenderer.invoke('hermes:connections:sign-out', id),

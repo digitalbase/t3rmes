@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const bridge = window.t3rmes;
-const EMPTY_CONNECTIONS = { active: 'local', state: 'idle', error: null, connections: [] };
+const EMPTY_CONNECTIONS = { active: 'local', state: 'idle', error: null, connections: [], importable: [] };
 const REFRESH_INTERVAL_MS = 10_000;
 const LIVE_BUSY = new Set(['working', 'starting', 'waiting']);
 
@@ -710,6 +710,8 @@ export function useHermes() {
     patchThreads: (keys, patch) => Promise.all(keys.map((key) => patchThread(key, patch))),
     selectConnection: wrap((id) => bridge.connections.select(id), true),
     addConnection: wrap((input) => bridge.connections.add(input), true),
+    updateConnection: wrap((id, input) => bridge.connections.update(id, input)),
+    importConnections: wrap(() => bridge.connections.importFromHermesDesktop()),
     removeConnection: wrap((id) => bridge.connections.remove(id), true),
     signIn: wrap((id) => bridge.connections.signIn(id)),
     signOut: wrap((id) => bridge.connections.signOut(id)),

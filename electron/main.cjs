@@ -45,6 +45,8 @@ function createWindow() {
 ipcMain.handle('hermes:connections:list', () => hermes.list());
 ipcMain.handle('hermes:connections:select', (_event, id) => hermes.select(id));
 ipcMain.handle('hermes:connections:add', (_event, input) => hermes.add(input));
+ipcMain.handle('hermes:connections:update', (_event, id, input) => hermes.update(id, input));
+ipcMain.handle('hermes:connections:import', () => hermes.importFromHermesDesktop());
 ipcMain.handle('hermes:connections:remove', (_event, id) => hermes.remove(id));
 ipcMain.handle('hermes:connections:sign-in', (_event, id) => hermes.signIn(id));
 ipcMain.handle('hermes:connections:sign-out', (_event, id) => hermes.signOut(id));
