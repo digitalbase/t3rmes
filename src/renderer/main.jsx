@@ -676,8 +676,8 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
       isSelected={selection.keys.has(thread.key)}
       jumpLabel={jumpLabelByKey.get(thread.key) ?? null}
       syncSupported={syncSupported && Boolean(thread.storedId)}
-      profile={showProfiles && !profileFilter ? thread.profile : null}
-      avatar={avatars[thread.profile]}
+      profile={thread.profile || hermes.defaultProfile}
+      avatar={avatars[thread.profile || hermes.defaultProfile]}
       onSelect={(event) => handleRowClick(event, thread)}
       onContextMenu={(event) => openContextMenu(event, thread)}
       onPin={(value) => hermes.pinThread(thread.key, value)}
@@ -1230,7 +1230,7 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, jumpLabel, sy
   // Sidebar.logic shouldRecedeSidebarThread: read idle threads and background work recede;
   // the open, selected, waiting, failed and unread ones stay at full strength.
   const shouldRecede = !isActive && !isSelected && (status === null || status === 'working');
-  // The owning profile, while the list mixes profiles.
+  // The owning profile, shown even when the gateway has only one.
   const project = profile;
   const model = modelLabel(thread.model);
   const stop = (fn) => (event) => {

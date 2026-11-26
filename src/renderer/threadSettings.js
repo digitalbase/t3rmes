@@ -103,6 +103,6 @@ export function setAutoSettleKept(ids, kept) {
 
 // T3 auto-settle: unpinned, idle threads count as settled until something happens in them.
 export function isAutoSettled(thread, days, kept, now = Date.now() / 1000) {
-  if (days === null || !thread.storedId || thread.pinned || thread.running || thread.liveStatus) return false;
+  if (days === null || !thread.storedId || thread.pinned || thread.running || thread.liveStatus || thread.subagents) return false;
   return now - Math.max(thread.lastActive || 0, kept[thread.storedId] || 0) > days * 86400;
 }

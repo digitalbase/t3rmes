@@ -32,6 +32,8 @@ const newThread = (fields = {}) => ({
   runningSince: null,
   failed: false,
   liveStatus: null,
+  // Background subagents and processes still running for this session (subagent.roster).
+  subagents: 0,
   // The Hermes profile that owns the session; every call for this thread is scoped to it.
   profile: null,
   pinned: false,
@@ -143,6 +145,24 @@ function toolFailed(result) {
   return Boolean(result.error);
 }
 
+// delegate_task(background=true) answers {"status": "dispatched", "count": n} and returns at once.
+function backgroundSubagents(turn) {
+  let count = 0;
+  for (const m of turn) {
+    if (m.role !== 'tool' || !m.name?.startsWith('delegate')) continue;
+    let result = m.result;
+    if (typeof result === 'string') {
+      try {
+        result = JSON.parse(result);
+      } catch {
+        continue;
+      }
+    }
+    if (result?.status === 'dispatched') count += Number(result.count) || 1;
+  }
+  return count;
+}
+
 function applyEvent(thread, type, payload = {}) {
   let messages = thread.messages;
   switch (type) {
@@ -198,6 +218,8 @@ function applyEvent(thread, type, payload = {}) {
       // The turn's span, for the "Worked for" fold; stamped on the reply that ends it.
       const lastIndex = messages.findLastIndex((m) => m.role === 'assistant');
       const turnStart = messages.findLastIndex((m) => m.role === 'user');
+      // A turn that hands off to background subagents ends while they keep working; the roster poll confirms.
+      const delegated = failed ? 0 : backgroundSubagents(messages.slice(turnStart + 1));
       if (lastIndex > turnStart) {
         messages[lastIndex] = {
           ...messages[lastIndex],
@@ -211,8 +233,9 @@ function applyEvent(thread, type, payload = {}) {
       return {
         ...thread,
         running: false,
-        runningSince: null,
+        runningSince: delegated ? thread.runningSince : null,
         liveStatus: null,
+        subagents: delegated,
         failed,
         lastActive: Date.now() / 1000,
         messages,
@@ -338,7 +361,7 @@ function historyToMessages(history = []) {
 
 // The thread's Hermes-derived status: working | waiting | failed | unread | null.
 export function threadStatus(thread) {
-  if (thread.running || thread.liveStatus === 'working' || thread.liveStatus === 'starting') return 'working';
+  if (thread.running || thread.liveStatus === 'working' || thread.liveStatus === 'starting' || thread.subagents > 0) return 'working';
   if (thread.liveStatus === 'waiting') return 'waiting';
   if (thread.failed) return 'failed';
   if (thread.unread) return 'unread';
@@ -383,7 +406,7 @@ export function useHermes() {
     setThreads((current) => current.map((t) => (t.key === key ? update(t) : t)));
   }, []);
 
-  const mergeRows = useCallback((rows, live) => {
+  const mergeRows = useCallback((rows, live, roster) => {
     setThreads((current) => {
       const byStored = new Map((rows || []).map((row) => [row.id, row]));
       const merged = current.map((t) => {
@@ -396,11 +419,20 @@ export function useHermes() {
             next = { ...next, liveStatus, runningSince: liveStatus ? next.runningSince ?? Date.now() : next.running ? next.runningSince : null };
           }
         }
+        // Without the roster, a turn's own "dispatched" hint clears on the next refresh.
+        if (next.storedId && (roster || next.subagents)) {
+          const subagents = roster?.get(next.storedId) || 0;
+          if (subagents !== next.subagents) {
+            const busy = subagents || next.running || next.liveStatus;
+            next = { ...next, subagents, runningSince: busy ? next.runningSince ?? Date.now() : null };
+          }
+        }
         return next;
       });
       const added = [...byStored.values()].map((row) => {
         const liveStatus = live && LIVE_BUSY.has(live.get(row.id)) ? live.get(row.id) : null;
-        return newThread({ ...fromSessionRow(row), liveStatus, runningSince: liveStatus ? Date.now() : null });
+        const subagents = roster?.get(row.id) || 0;
+        return newThread({ ...fromSessionRow(row), liveStatus, subagents, runningSince: liveStatus || subagents ? Date.now() : null });
       });
       return added.length || merged.some((t, i) => t !== current[i]) ? [...merged, ...added] : current;
     });
@@ -433,7 +465,13 @@ export function useHermes() {
       const { sessions = [] } = await bridge.request('session.active_list', {});
       live = new Map(sessions.map((s) => [s.session_key, s.status]));
     } catch {}
-    mergeRows(rows, live);
+    // Background subagents and processes outlive the turn that started them (Hermes Desktop's live-work roster).
+    let roster = null;
+    try {
+      const { sessions = [] } = await bridge.request('subagent.roster', profileParam(profileScopeRef.current));
+      roster = new Map(sessions.map((s) => [s.session_id, (s.subagents || 0) + (s.background || 0)]));
+    } catch {}
+    mergeRows(rows, live, roster);
   }, [mergeRows]);
 
   // The next page of older sessions, behind the ones already loaded.
