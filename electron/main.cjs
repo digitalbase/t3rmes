@@ -44,6 +44,7 @@ function createWindow() {
 
 const profileQuery = (profile, sep) => (profile ? `${sep}profile=${encodeURIComponent(profile)}` : '');
 ipcMain.handle('hermes:connections:list', () => hermes.list());
+ipcMain.handle('hermes:connections:health', () => hermes.health());
 ipcMain.handle('hermes:connections:select', (_event, id) => hermes.select(id));
 ipcMain.handle('hermes:connections:add', (_event, input) => hermes.add(input));
 ipcMain.handle('hermes:connections:update', (_event, id, input) => hermes.update(id, input));

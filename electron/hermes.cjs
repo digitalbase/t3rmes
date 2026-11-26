@@ -404,6 +404,27 @@ function createHermesService({ getWindow }) {
       gateway?.close();
     },
     list: () => snapshot(),
+    // Health of every saved gateway, for the switcher: the active one reports its live socket,
+    // the others are probed for reachability and a stored sign-in.
+    async health() {
+      const entries = await Promise.all(
+        registry.connections.map(async (connection) => {
+          if (gateway && gateway.connection.id === connection.id) {
+            return [connection.id, { state: gateway.state, error: gateway.error || null }];
+          }
+          try {
+            await probe(connection.url);
+          } catch (error) {
+            return [connection.id, { state: 'error', error: error.message }];
+          }
+          if (connection.authMode !== 'token' && !(await hasSessionCookie(connection).catch(() => false))) {
+            return [connection.id, { state: 'signed-out', error: 'Not signed in.' }];
+          }
+          return [connection.id, { state: 'ready', error: null }];
+        }),
+      );
+      return Object.fromEntries(entries);
+    },
     select(id) {
       activate(id);
       return snapshot();

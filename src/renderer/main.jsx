@@ -276,11 +276,20 @@ function AppShortcuts({ hermes }) {
   return null;
 }
 
+const CONNECTION_STATE_LABELS = { connecting: 'Connecting…', 'signed-out': 'Signed out', error: 'Unreachable' };
+
 function ConnectionSwitcher({ hermes, onManage }) {
   const { connections } = hermes;
   const active = connections.connections.find((c) => c.id === connections.active);
+  // Probed each time the menu opens; the active gateway always shows its live state.
+  const [health, setHealth] = useState({});
+  const stateOf = (id) => (id === connections.active ? { state: connections.state, error: connections.error } : health[id]);
   return (
-    <Menu>
+    <Menu
+      onOpenChange={(open) => {
+        if (open) window.t3rmes.connections.health().then(setHealth).catch(() => {});
+      }}
+    >
       <MenuTrigger
         render={
           <SidebarMenuButton className="h-8 min-w-0 flex-1 px-2 text-sidebar-muted-foreground hover:text-sidebar-foreground data-[popup-open]:text-sidebar-foreground" />
@@ -295,14 +304,25 @@ function ConnectionSwitcher({ hermes, onManage }) {
         <MenuGroup>
           <MenuGroupLabel>Hermes gateway</MenuGroupLabel>
           <MenuRadioGroup value={connections.active} onValueChange={(id) => hermes.selectConnection(id)}>
-            {connections.connections.map((connection) => (
-              <MenuRadioItem key={connection.id} value={connection.id}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <GlobeIcon className="size-3.5 text-muted-foreground" />
-                  <span className="truncate">{connection.label}</span>
-                </span>
-              </MenuRadioItem>
-            ))}
+            {connections.connections.map((connection) => {
+              const status = stateOf(connection.id);
+              const label = status ? CONNECTION_STATE_LABELS[status.state] : null;
+              return (
+                <MenuRadioItem key={connection.id} value={connection.id} title={status?.error || undefined}>
+                  <span className="flex w-full min-w-0 items-center gap-2">
+                    <GlobeIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{connection.label}</span>
+                    <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-3">
+                      {label && <span className="text-xs text-muted-foreground">{label}</span>}
+                      <span
+                        aria-hidden
+                        className={cn('size-1.5 rounded-full', status ? stateTone(status.state) : 'bg-muted-foreground/40')}
+                      />
+                    </span>
+                  </span>
+                </MenuRadioItem>
+              );
+            })}
           </MenuRadioGroup>
         </MenuGroup>
         <MenuSeparator />
@@ -661,9 +681,11 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
       className="min-h-full overflow-x-hidden"
       fixedHeader={
         <SidebarGroup className="z-[1] gap-1 pt-0">
-          <div className="flex items-center">
-            <ConnectionSwitcher hermes={hermes} onManage={onManageConnections} />
-          </div>
+          {hermes.connections.connections.length > 1 && (
+            <div className="flex items-center">
+              <ConnectionSwitcher hermes={hermes} onManage={onManageConnections} />
+            </div>
+          )}
           {showProfiles && (
             <div className="flex items-center">
               <ProfileScopeFilter hermes={hermes} />

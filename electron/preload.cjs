@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('t3rmes', {
   version: '0.0.1',
   connections: {
     list: () => ipcRenderer.invoke('hermes:connections:list'),
+    health: () => ipcRenderer.invoke('hermes:connections:health'),
     select: (id) => ipcRenderer.invoke('hermes:connections:select', id),
     add: (input) => ipcRenderer.invoke('hermes:connections:add', input),
     update: (id, input) => ipcRenderer.invoke('hermes:connections:update', id, input),
