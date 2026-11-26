@@ -55,7 +55,13 @@
       "target": [
         "AppImage",
         "deb",
-        "pacman"
+        {
+          "target": "pacman",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "assets/icon.png",
       "category": "Development",
