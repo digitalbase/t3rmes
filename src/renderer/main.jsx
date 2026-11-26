@@ -471,11 +471,11 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
     };
   }, [isSearching, trimmedQuery, profileFilter]);
 
-  // Unsent new threads only show while they are open, like T3 drafts.
+  // An empty draft stays out of the list until its first message is sent.
   const shownSources = useSourceCategories();
   const allVisible = threads.filter(
     (t) =>
-      (t.storedId || t.messages.length > 0 || t.key === activeKey) &&
+      (t.storedId || t.messages.length > 0) &&
       (t.key === activeKey || ((!profileFilter || t.profile === profileFilter) && shownSources.includes(sourceCategory(t.source)))),
   );
   const projects = [...new Set(allVisible.map(projectLabel).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -491,6 +491,8 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
   const settled = visible.filter(isSettled).sort((a, b) => b.lastActive - a.lastActive);
   const renderedWorking = shelfRows(working, workingExpanded, activeKey);
   const renderedSettled = shelfRows(settled, settledExpanded, activeKey);
+  // Older pages are the least recent sessions, so they load as the open Settled shelf scrolls into view.
+  const hasOlder = sessionPage.total !== null && sessionPage.loaded < sessionPage.total;
   const orderedKeys = [...pinned, ...active, ...renderedWorking, ...renderedSettled].map((t) => t.key);
   const threadByKey = new Map(visible.map((t) => [t.key, t]));
 
@@ -758,23 +760,14 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
             <SidebarShelfHeader
               className={cn(working.length === 0 && 'mt-auto')}
               label="Settled"
-              count={settled.length}
+              count={hasOlder ? `${settled.length}+` : settled.length}
               expanded={settledExpanded}
               onToggle={toggleSettled}
             />
           )}
           {renderedSettled.map((thread) => row(thread, 'slim'))}
-          {sessionPage.total !== null && sessionPage.loaded < sessionPage.total && (
-            <li className="list-none">
-              <button
-                type="button"
-                onClick={hermes.loadMoreThreads}
-                disabled={sessionPage.loading}
-                className="flex h-8 w-full cursor-pointer items-center justify-center rounded-md text-xs text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground disabled:cursor-default"
-              >
-                {sessionPage.loading ? 'Loading…' : 'Load older threads'}
-              </button>
-            </li>
+          {hasOlder && settledExpanded && (
+            <OlderThreadsLoader loading={sessionPage.loading} loaded={sessionPage.loaded} onLoad={hermes.loadMoreThreads} />
           )}
         </ul>
         </TooltipProvider>
@@ -1179,6 +1172,27 @@ function SidebarSearchResultRow({ thread, resultId, isSettled, isHighlighted, is
           ) : null}
         </span>
       </button>
+    </li>
+  );
+}
+
+// Fetches the next page whenever the end of the Settled shelf is on screen.
+function OlderThreadsLoader({ loading, loaded, onLoad }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (loading || !ref.current) return;
+    const observer = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && onLoad(), { rootMargin: '200px' });
+    observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, [loading, loaded, onLoad]);
+  return (
+    <li ref={ref} className="flex h-9 list-none items-center gap-2 px-2.5 text-xs text-sidebar-muted-foreground" aria-live="polite">
+      {loading && (
+        <>
+          <LoaderCircleIcon className="size-3.5 animate-spin" />
+          Loading older threads…
+        </>
+      )}
     </li>
   );
 }
