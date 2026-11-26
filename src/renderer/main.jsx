@@ -661,10 +661,14 @@ function ThreadNav({ hermes, activeKey, onSelect, onNew, onManageConnections }) 
       className="min-h-full overflow-x-hidden"
       fixedHeader={
         <SidebarGroup className="z-[1] gap-1 pt-0">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center">
             <ConnectionSwitcher hermes={hermes} onManage={onManageConnections} />
-            {showProfiles && <ProfileScopeFilter hermes={hermes} />}
           </div>
+          {showProfiles && (
+            <div className="flex items-center">
+              <ProfileScopeFilter hermes={hermes} />
+            </div>
+          )}
           <SidebarThreadHeader
             searchInputRef={searchInputRef}
             searchQuery={searchQuery}
@@ -887,7 +891,13 @@ function ProfileScopeFilter({ hermes }) {
           {(item) => (
             <ComboboxItem key={item.value ?? 'all'} hideIndicator value={item} aria-selected={item.value === profileScope}>
               <ProjectScopeRowIcon isSelected={item.value === profileScope}>
-                {item.value ? <ProfileAvatar name={item.value} src={avatars[item.value]} className="size-5" /> : <UsersIcon className="size-4 shrink-0" />}
+                {item.value ? (
+                  <ProfileAvatar name={item.value} src={avatars[item.value]} className="size-5" />
+                ) : (
+                  <span className="flex size-5 shrink-0 items-center justify-center">
+                    <UsersIcon className="size-4" />
+                  </span>
+                )}
               </ProjectScopeRowIcon>
               <span className="flex min-w-0 flex-col">
                 <span className="truncate text-sm">{item.label}</span>
@@ -1258,12 +1268,10 @@ function SidebarThreadRow({ thread, variant, isActive, isSelected, jumpLabel, sy
         <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
             {/* T3: left of the status slot, so hover's wider row controls don't slide it. */}
+            {project ? <ProfileAvatar name={project} src={avatar} className="size-3.5" /> : null}
             {pinIndicator}
             {project ? (
-              <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 font-normal text-secondary-label text-xs">
-                <ProfileAvatar name={project} src={avatar} className="size-3.5" />
-                <span className="truncate">{project}</span>
-              </span>
+              <span className="min-w-0 flex-1 truncate font-normal text-secondary-label text-xs">{project}</span>
             ) : (
               <span className="flex-1" />
             )}
